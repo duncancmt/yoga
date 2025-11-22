@@ -31,7 +31,7 @@ export default function Uniswap4Positions({ ownerAddress = '0x6426af179aabebe476
   //   Large account:
   //   0xae2Fc483527B8EF99EB5D9B44875F005ba1FaE13
   const uniswapValue = data?.assetByProtocols?.uniswap4?.value;
-  const numOfPositions = data?.assetByProtocols?.uniswap4?.chains.ethereum?.protocolPositions.LIQUIDITYPOOL.protocolPositions?.length ?? 0;
+  const positions = data?.assetByProtocols?.uniswap4?.chains.ethereum?.protocolPositions.LIQUIDITYPOOL.protocolPositions;
 
   return (
     <div className="p-4 border border-gray-300 bg-gray-50 rounded-md">
@@ -39,9 +39,20 @@ export default function Uniswap4Positions({ ownerAddress = '0x6426af179aabebe476
       {uniswapValue != null ? (
         <>
           <p className="text-gray-600">Total value: ${uniswapValue}</p>
-          <p className="text-gray-600">Number of positions: {numOfPositions}</p>
+          <p className="text-gray-600">Number of positions: {positions?.length ?? 0}</p>
+          {positions && positions.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {positions.map((position: any, index: number) => (
+                <div key={index} className="p-2 border border-gray-200 rounded-md bg-white">
+                  <p className="font-medium text-sm">Position {index + 1}</p>
+                  <p className="text-xs text-gray-500">Value: ${position.value}</p>
+                  {/* You can add more details here as you see fit */}
+                </div>
+              ))}
+            </div>
+          )}
         </>
-      ) : null}
+      ) : <p className="text-gray-600">No Uniswap v4 positions found.</p>}
     </div>
   );
 }
