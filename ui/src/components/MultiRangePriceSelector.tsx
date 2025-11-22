@@ -3,6 +3,13 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Plus, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { Label } from "@radix-ui/react-label";
+import ethLogo from "cryptocurrency-icons/svg/color/eth.svg";
+import usdcLogo from "cryptocurrency-icons/svg/color/usdc.svg";
+import { useAccount, useBalance } from "wagmi";
+import DepositTokens from "./DepositTokens";
+import { useUniswap } from "@/providers/UniswapProvider";
+import { getPositionType } from "@/lib/utils";
 
 interface SubPositionRange {
   id: string;
@@ -14,14 +21,16 @@ interface MultiRangePriceSelectorProps {
   currentPrice: number;
   subPositions: SubPositionRange[];
   onRangeChange: (id: string, minPrice: number, maxPrice: number) => void;
-  onBulkRangeChange?: (updates: Array<{ id: string; minPrice: number; maxPrice: number }>) => void;
+  onBulkRangeChange?: (
+    updates: Array<{ id: string; minPrice: number; maxPrice: number }>
+  ) => void;
   onAddSubPosition?: () => void;
   onRemoveSubPosition: (id: string) => void;
   handleAutoRebalance: (id: string) => void;
   tokenSymbol?: string;
   visualMinBound?: number;
   visualMaxBound?: number;
-  showAddButton?: boolean;
+  modifyPosition?: boolean;
 }
 
 export function MultiRangePriceSelector({
@@ -29,19 +38,31 @@ export function MultiRangePriceSelector({
   subPositions,
   onRangeChange,
   onBulkRangeChange,
-  onAddSubPosition,
-  onRemoveSubPosition,
   handleAutoRebalance,
   tokenSymbol = "ETH/USDC",
   visualMinBound,
   visualMaxBound,
-  showAddButton = false,
+  modifyPosition = false,
 }: MultiRangePriceSelectorProps) {
+  // const {getCurrentPrice} = useUniswap();
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState<{
     sliderIndex: number;
   } | null>(null);
   const affectedPositionIdsRef = useRef<Set<string>>(new Set());
+
+  const { address, isConnected } = useAccount();
+
+  // Fetch wallet balances
+  const { data: ethBalance } = useBalance({
+    address: address,
+  });
+
+  const { data: usdcBalance } = useBalance({
+    address: address,
+    token: "0x078D782b760474a361dDA0AF3839290b0EF57AD6" as `0x${string}`, // USDC on Unichain
+  });
 
   // Calculate visual bounds (50% below to 50% above current price if not provided)
   const lowerBound = visualMinBound ?? currentPrice * 0.5;
@@ -60,6 +81,37 @@ export function MultiRangePriceSelector({
   };
 
   const currentPricePercent = priceToPercent(currentPrice);
+
+  // Add new position state
+  const [newPositionSide, setNewPositionSide] = useState<"left" | "right">(
+    "right"
+  );
+  const [newPositionMinPrice, setNewPositionMinPrice] = useState<number>(0);
+  const [newPositionMaxPrice, setNewPositionMaxPrice] = useState<number>(0);
+  const [newPositionAmount0, setNewPositionAmount0] = useState("");
+  const [newPositionAmount1, setNewPositionAmount1] = useState("");
+
+  const [addSubPosition, setAddSubPosition] = useState(false);
+
+  // Initialize new position range when adding
+  useEffect(() => {
+    if (currentPrice && addSubPosition) {
+      if (newPositionSide === "right") {
+        // Attach to the right of the rightmost position
+        const rightmost = subPositions[subPositions.length - 1];
+        const range = rightmost.maxPrice - rightmost.minPrice;
+
+        setNewPositionMinPrice(rightmost.maxPrice); // Fixed boundary
+        setNewPositionMaxPrice(rightmost.maxPrice + range);
+      } else {
+        // Attach to the left of the leftmost position
+        const leftmost = subPositions[0];
+        const range = leftmost.maxPrice - leftmost.minPrice;
+        setNewPositionMaxPrice(leftmost.minPrice); // Fixed boundary
+        setNewPositionMinPrice(leftmost.minPrice - range);
+      }
+    }
+  }, [newPositionSide, currentPrice, subPositions, addSubPosition]);
 
   // Build array of slider positions from subPositions
   // For n positions, we need n+1 sliders
@@ -132,8 +184,16 @@ export function MultiRangePriceSelector({
         // Use bulk update if available, otherwise fall back to individual updates
         if (onBulkRangeChange) {
           onBulkRangeChange([
-            { id: leftPos.id, minPrice: leftPos.minPrice, maxPrice: constrainedPrice },
-            { id: rightPos.id, minPrice: constrainedPrice, maxPrice: rightPos.maxPrice },
+            {
+              id: leftPos.id,
+              minPrice: leftPos.minPrice,
+              maxPrice: constrainedPrice,
+            },
+            {
+              id: rightPos.id,
+              minPrice: constrainedPrice,
+              maxPrice: rightPos.maxPrice,
+            },
           ]);
           affectedPositionIdsRef.current.add(leftPos.id);
           affectedPositionIdsRef.current.add(rightPos.id);
@@ -181,12 +241,12 @@ export function MultiRangePriceSelector({
       {/* Visual Range Selector */}
       <div className="relative">
         {/* Add Sub-Position Button */}
-        {showAddButton && onAddSubPosition && (
+        {modifyPosition && (
           <div className="absolute -top-10 right-0 z-30">
             <Button
               size="sm"
               variant="outline"
-              onClick={onAddSubPosition}
+              onClick={() => setAddSubPosition(true)}
               className="h-8 gap-1"
             >
               <Plus className="h-4 w-4" />
@@ -195,11 +255,38 @@ export function MultiRangePriceSelector({
           </div>
         )}
 
+        {addSubPosition && (
+          <>
+            {/* Side Toggle */}
+            <div className="flex items-center gap-2">
+              <Label className="text-sm">Attach to:</Label>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant={newPositionSide === "left" ? "default" : "outline"}
+                  onClick={() => setNewPositionSide("left")}
+                >
+                  ← Left Side
+                </Button>
+                <Button
+                  size="sm"
+                  variant={newPositionSide === "right" ? "default" : "outline"}
+                  onClick={() => setNewPositionSide("right")}
+                >
+                  Right Side →
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+
         <div
           ref={containerRef}
           className="relative h-32 bg-card border border-border rounded-lg overflow-hidden"
           style={{ userSelect: "none" }}
         >
+          {addSubPosition && <></>}
+
           {/* Render each sub-position range */}
           {subPositions.map((subPos, index) => {
             const minPercent = priceToPercent(subPos.minPrice);
@@ -322,53 +409,62 @@ export function MultiRangePriceSelector({
       <div className="space-y-3">
         {subPositions.map((subPos, index) => (
           <div key={subPos.id} className="relative">
-            {subPositions.length > 1 && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => onRemoveSubPosition(subPos.id)}
-                className="absolute -top-2 -right-2 h-6 w-6 p-0 rounded-full z-10"
-              >
-                <X className="h-3 w-3" />
-              </Button>
+            {!modifyPosition && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-card border border-border rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">
+                    Position {index + 1} - Min Price
+                  </p>
+                  <p className="text-xl font-semibold text-foreground">
+                    $
+                    {subPos.minPrice.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {((subPos.minPrice / currentPrice - 1) * 100).toFixed(1)}%
+                    from current
+                  </p>
+                </div>
+                <div className="p-4 bg-card border border-border rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">
+                    Position {index + 1} - Max Price
+                  </p>
+                  <p className="text-xl font-semibold text-foreground">
+                    $
+                    {subPos.maxPrice.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    +{((subPos.maxPrice / currentPrice - 1) * 100).toFixed(1)}%
+                    from current
+                  </p>
+                </div>
+              </div>
             )}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 bg-card border border-border rounded-lg">
-                <p className="text-xs text-muted-foreground mb-1">
-                  Position {index + 1} - Min Price
-                </p>
-                <p className="text-xl font-semibold text-foreground">
-                  $
-                  {subPos.minPrice.toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {((subPos.minPrice / currentPrice - 1) * 100).toFixed(1)}%
-                  from current
-                </p>
-              </div>
-              <div className="p-4 bg-card border border-border rounded-lg">
-                <p className="text-xs text-muted-foreground mb-1">
-                  Position {index + 1} - Max Price
-                </p>
-                <p className="text-xl font-semibold text-foreground">
-                  $
-                  {subPos.maxPrice.toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  +{((subPos.maxPrice / currentPrice - 1) * 100).toFixed(1)}%
-                  from current
-                </p>
-              </div>
-            </div>
           </div>
         ))}
       </div>
+
+      {/* New Position Range Selector */}
+
+      {addSubPosition && (
+        <DepositTokens
+          positionType={getPositionType(
+            newPositionMinPrice,
+            newPositionMaxPrice,
+            currentPrice
+          )}
+          handleAmount0Change={() => {}}
+          handleAmount1Change={() => {}}
+          amount0={newPositionAmount0}
+          amount1={newPositionAmount1}
+          currentPrice={currentPrice}
+        />
+      )}
     </div>
   );
 }

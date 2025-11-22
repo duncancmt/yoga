@@ -20,6 +20,7 @@ import usdcLogo from "cryptocurrency-icons/svg/color/usdc.svg";
 import { ArrowLeft, Plus, Minus, Coins } from "lucide-react";
 import { Pool, Position as UniPosition } from "@uniswap/v4-sdk";
 import { Token, Ether, ChainId, CurrencyAmount } from "@uniswap/sdk-core";
+import SubPosition from "@/components/SubPosition";
 
 // Token constants
 const ETH_NATIVE = Ether.onChain(ChainId.UNICHAIN);
@@ -68,16 +69,17 @@ export default function PositionPage() {
 
   // Sub-positions state
   const [subPositions, setSubPositions] = useState<SubPosition[]>([]);
-  const [showSubPositionsForm, setShowSubPositionsForm] = useState(false);
 
-  // Add liquidity state
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [addAmount0, setAddAmount0] = useState("");
-  const [addAmount1, setAddAmount1] = useState("");
+  // // Add new position state
+  // const [newPositionSide, setNewPositionSide] = useState<"left" | "right">(
+  //   "right"
+  // );
+  // const [newPositionMinPrice, setNewPositionMinPrice] = useState<number>(0);
+  // const [newPositionMaxPrice, setNewPositionMaxPrice] = useState<number>(0);
+  // const [newPositionAmount0, setNewPositionAmount0] = useState("");
+  // const [newPositionAmount1, setNewPositionAmount1] = useState("");
 
-  // Remove liquidity state
-  const [showRemoveForm, setShowRemoveForm] = useState(false);
-  const [removePercentage, setRemovePercentage] = useState("50");
+  // Edit existing position state
 
   const tokenId = params.tokenId as string;
 
@@ -137,38 +139,9 @@ export default function PositionPage() {
     if (isConfirmed) {
       setTimeout(() => {
         fetchPosition();
-        setShowAddForm(false);
-        setShowRemoveForm(false);
       }, 2000);
     }
   }, [isConfirmed]);
-
-  const handleAddLiquidity = async () => {
-    if (!position) return;
-
-    try {
-      await addLiquidity({
-        tokenId: position.tokenId,
-        amount0Desired: BigInt(Math.floor(parseFloat(addAmount0) * 1e18)),
-        amount1Desired: BigInt(Math.floor(parseFloat(addAmount1) * 1e6)),
-      });
-    } catch (err) {
-      console.error("Failed to add liquidity:", err);
-    }
-  };
-
-  const handleRemoveLiquidity = async () => {
-    if (!position) return;
-
-    try {
-      await removeLiquidity({
-        tokenId: position.tokenId,
-        liquidityPercentage: parseFloat(removePercentage) / 100,
-      });
-    } catch (err) {
-      console.error("Failed to remove liquidity:", err);
-    }
-  };
 
   const handleCollectFees = async () => {
     if (!position) return;
@@ -183,120 +156,6 @@ export default function PositionPage() {
       }
     } catch (err) {
       console.error("Failed to collect fees:", err);
-    }
-  };
-
-  // Sub-position handlers
-  const handleAddSubPosition = () => {
-    if (!currentPrice || subPositions.length === 0) return;
-
-    const lastPos = subPositions[subPositions.length - 1];
-    const midPrice = (lastPos.minPrice + lastPos.maxPrice) / 2;
-
-    const updatedLastPos: SubPosition = {
-      ...lastPos,
-      maxPrice: midPrice,
-      amount0: "",
-      amount1: "",
-      lastInputToken: null,
-    };
-
-    const newId = (subPositions.length + 1).toString();
-    const newSubPosition: SubPosition = {
-      id: newId,
-      minPrice: midPrice,
-      maxPrice: lastPos.maxPrice,
-      amount0: "",
-      amount1: "",
-      lastInputToken: null,
-    };
-
-    setSubPositions([
-      ...subPositions.slice(0, -1),
-      updatedLastPos,
-      newSubPosition,
-    ]);
-  };
-
-  const handleRemoveSubPosition = (id: string) => {
-    if (subPositions.length === 1) return;
-
-    const posIdx = subPositions.findIndex((sp) => sp.id === id);
-    if (posIdx === -1) return;
-
-    if (posIdx === subPositions.length - 1) {
-      const prevPos = subPositions[posIdx - 1];
-      const removedPos = subPositions[posIdx];
-
-      const extendedPrevPos: SubPosition = {
-        ...prevPos,
-        maxPrice: removedPos.maxPrice,
-        amount0: "",
-        amount1: "",
-        lastInputToken: null,
-      };
-
-      setSubPositions([
-        ...subPositions.slice(0, posIdx - 1),
-        extendedPrevPos,
-      ]);
-    } else {
-      const removedPos = subPositions[posIdx];
-      const nextPos = subPositions[posIdx + 1];
-
-      const extendedNextPos: SubPosition = {
-        ...nextPos,
-        minPrice: removedPos.minPrice,
-        amount0: "",
-        amount1: "",
-        lastInputToken: null,
-      };
-
-      setSubPositions([
-        ...subPositions.slice(0, posIdx),
-        extendedNextPos,
-        ...subPositions.slice(posIdx + 2),
-      ]);
-    }
-  };
-
-  const updateSubPositionRange = (
-    id: string,
-    minPrice: number,
-    maxPrice: number
-  ) => {
-    setSubPositions((prevPositions) =>
-      prevPositions.map((sp) =>
-        sp.id === id ? { ...sp, minPrice, maxPrice } : sp
-      )
-    );
-  };
-
-  const bulkUpdateSubPositionRanges = (
-    updates: Array<{ id: string; minPrice: number; maxPrice: number }>
-  ) => {
-    setSubPositions((prevPositions) =>
-      prevPositions.map((sp) => {
-        const update = updates.find((u) => u.id === sp.id);
-        return update
-          ? { ...sp, minPrice: update.minPrice, maxPrice: update.maxPrice }
-          : sp;
-      })
-    );
-  };
-
-  const getPositionType = (
-    minPrice: number,
-    maxPrice: number
-  ): "both" | "only-eth" | "only-usdc" | "unknown" => {
-    if (!currentPrice || !minPrice || !maxPrice) return "unknown";
-
-    if (minPrice > currentPrice) {
-      return "only-eth";
-    } else if (maxPrice < currentPrice) {
-      return "only-usdc";
-    } else {
-      return "both";
     }
   };
 
@@ -385,9 +244,7 @@ export default function PositionPage() {
             <CardContent className="space-y-6">
               {/* Pool Information */}
               <div>
-                <h3 className="text-lg font-semibold mb-3">
-                  Pool Information
-                </h3>
+                <h3 className="text-lg font-semibold mb-3">Pool Information</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <p className="text-sm text-muted-foreground">Fee Tier</p>
@@ -399,7 +256,9 @@ export default function PositionPage() {
                     <p className="text-sm text-muted-foreground">
                       Tick Spacing
                     </p>
-                    <p className="font-medium">{position.poolKey.tickSpacing}</p>
+                    <p className="font-medium">
+                      {position.poolKey.tickSpacing}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -446,65 +305,19 @@ export default function PositionPage() {
             </CardContent>
           </Card>
 
-          {/* Quick Actions */}
-          <div className="grid grid-cols-4 gap-4">
-            <Button
-              onClick={() => {
-                setShowSubPositionsForm(!showSubPositionsForm);
-                setShowAddForm(false);
-                setShowRemoveForm(false);
-              }}
-              variant={showSubPositionsForm ? "default" : "outline"}
-              className="h-auto py-4"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Manage Sub-Positions
-            </Button>
-            <Button
-              onClick={() => {
-                setShowAddForm(!showAddForm);
-                setShowRemoveForm(false);
-                setShowSubPositionsForm(false);
-              }}
-              variant="outline"
-              className="h-auto py-4"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Add Liquidity
-            </Button>
-            <Button
-              onClick={() => {
-                setShowRemoveForm(!showRemoveForm);
-                setShowAddForm(false);
-                setShowSubPositionsForm(false);
-              }}
-              variant="outline"
-              className="h-auto py-4"
-            >
-              <Minus className="mr-2 h-4 w-4" />
-              Remove Liquidity
-            </Button>
-            <Button
-              onClick={handleCollectFees}
-              disabled={isMinting || isConfirming}
-              variant="outline"
-              className="h-auto py-4"
-            >
-              <Coins className="mr-2 h-4 w-4" />
-              Collect Fees
-            </Button>
-          </div>
-
-          {/* Manage Sub-Positions Form */}
-          {showSubPositionsForm && currentPrice && (
+          {/* Overall Position Visualization */}
+          {currentPrice && subPositions.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle>Manage Sub-Positions</CardTitle>
-                <CardDescription>
-                  Split your position into multiple contiguous sub-positions
-                </CardDescription>
+                <div>
+                  <CardTitle>Position Overview</CardTitle>
+                  <CardDescription>
+                    Your position contains {subPositions.length} contiguous
+                    sub-position{subPositions.length > 1 ? "s" : ""}
+                  </CardDescription>
+                </div>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent>
                 <MultiRangePriceSelector
                   currentPrice={currentPrice}
                   subPositions={subPositions.map((sp) => ({
@@ -512,131 +325,25 @@ export default function PositionPage() {
                     minPrice: sp.minPrice,
                     maxPrice: sp.maxPrice,
                   }))}
-                  onRangeChange={updateSubPositionRange}
-                  onBulkRangeChange={bulkUpdateSubPositionRanges}
-                  onAddSubPosition={handleAddSubPosition}
-                  onRemoveSubPosition={handleRemoveSubPosition}
+                  onRangeChange={() => {}}
+                  onRemoveSubPosition={() => {}}
                   handleAutoRebalance={() => {}}
                   tokenSymbol="ETH/USDC"
-                  showAddButton={true}
+                  modifyPosition={true}
                 />
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Add Liquidity Form */}
-          {showAddForm && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Add Liquidity</CardTitle>
-                <CardDescription>
-                  Increase your position size by adding more tokens
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="addAmount0">ETH Amount</Label>
-                  <Input
-                    id="addAmount0"
-                    type="number"
-                    step="0.0001"
-                    value={addAmount0}
-                    onChange={(e) => setAddAmount0(e.target.value)}
-                    placeholder="0.001"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="addAmount1">USDC Amount</Label>
-                  <Input
-                    id="addAmount1"
-                    type="number"
-                    step="0.01"
-                    value={addAmount1}
-                    onChange={(e) => setAddAmount1(e.target.value)}
-                    placeholder="1.0"
-                  />
-                </div>
-                <Button
-                  onClick={handleAddLiquidity}
-                  disabled={
-                    isMinting ||
-                    isConfirming ||
-                    !addAmount0 ||
-                    !addAmount1
-                  }
-                  className="w-full"
-                >
-                  {isMinting || isConfirming
-                    ? "Processing..."
-                    : "Add Liquidity"}
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Remove Liquidity Form */}
-          {showRemoveForm && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Remove Liquidity</CardTitle>
-                <CardDescription>
-                  Withdraw tokens from your position
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="removePercentage">
-                    Percentage to Remove: {removePercentage}%
-                  </Label>
-                  <Input
-                    id="removePercentage"
-                    type="range"
-                    min="1"
-                    max="100"
-                    value={removePercentage}
-                    onChange={(e) => setRemovePercentage(e.target.value)}
-                  />
-                  <div className="flex gap-2 justify-between mt-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setRemovePercentage("25")}
-                    >
-                      25%
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setRemovePercentage("50")}
-                    >
-                      50%
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setRemovePercentage("75")}
-                    >
-                      75%
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setRemovePercentage("100")}
-                    >
-                      Max
-                    </Button>
+                {/* Sub-Position Cards */}
+                {currentPrice && subPositions.length > 0 && (
+                  <div className="space-y-3">
+                    {subPositions.map((subPos, index) => (
+                      <SubPosition
+                        index={index}
+                        minPrice={subPos.minPrice}
+                        maxPrice={subPos.maxPrice}
+                        currentPrice={currentPrice}
+                      />
+                    ))}
                   </div>
-                </div>
-                <Button
-                  onClick={handleRemoveLiquidity}
-                  disabled={isMinting || isConfirming}
-                  className="w-full"
-                  variant="destructive"
-                >
-                  {isMinting || isConfirming
-                    ? "Processing..."
-                    : "Remove Liquidity"}
-                </Button>
+                )}
               </CardContent>
             </Card>
           )}

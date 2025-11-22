@@ -24,6 +24,9 @@ import ethLogo from "cryptocurrency-icons/svg/color/eth.svg";
 import usdcLogo from "cryptocurrency-icons/svg/color/usdc.svg";
 import { Pool, Position } from "@uniswap/v4-sdk";
 import { Token, Ether, ChainId, CurrencyAmount } from "@uniswap/sdk-core";
+import DepositTokens from "@/components/DepositTokens";
+import { PositionType } from "@/lib/types";
+import { getPositionType } from "@/lib/utils";
 
 // Token constants
 const ETH_NATIVE = Ether.onChain(ChainId.UNICHAIN);
@@ -56,7 +59,7 @@ export default function Home() {
   } = useUniswap();
 
   // Sub-position type
-  interface SubPosition {
+  interface Position {
     id: string;
     minPrice: number;
     maxPrice: number;
@@ -67,25 +70,13 @@ export default function Home() {
 
   // Price state
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
-  const [subPositions, setSubPositions] = useState<SubPosition[]>([
-    {
-      id: "1",
-      minPrice: 2000,
-      maxPrice: 3500,
-      amount0: "",
-      amount1: "",
-      lastInputToken: null,
-    },
-  ]);
-
-  // Fetch wallet balances
-  const { data: ethBalance } = useBalance({
-    address: address,
-  });
-
-  const { data: usdcBalance } = useBalance({
-    address: address,
-    token: "0x078D782b760474a361dDA0AF3839290b0EF57AD6" as `0x${string}`, // USDC on Unichain
+  const [position, setPosition] = useState<Position>({
+    id: "1",
+    minPrice: 2000,
+    maxPrice: 3500,
+    amount0: "",
+    amount1: "",
+    lastInputToken: null,
   });
 
   // Positions state
@@ -98,16 +89,14 @@ export default function Home() {
       if (price) {
         setCurrentPrice(price);
         // Set default range to +/- 25% from current price
-        setSubPositions([
-          {
-            id: "1",
-            minPrice: price * 0.75,
-            maxPrice: price * 1.25,
-            amount0: "",
-            amount1: "",
-            lastInputToken: null,
-          },
-        ]);
+        setPosition({
+          id: "1",
+          minPrice: price * 0.75,
+          maxPrice: price * 1.25,
+          amount0: "",
+          amount1: "",
+          lastInputToken: null,
+        });
       }
     });
   }, [getCurrentPrice]);
@@ -147,24 +136,20 @@ export default function Home() {
   }, [isConfirmed, address, fetchUserPositions]);
 
   const handleCreatePosition = () => {
-    if (!address || subPositions.length === 0) return;
-
-    // For now, create position with the first sub-position
-    // TODO: Support creating multiple positions
-    const firstSubPos = subPositions[0];
+    if (!address || !position) return;
 
     // Convert prices to ticks
-    const tickLower = priceToTick(firstSubPos.minPrice);
-    const tickUpper = priceToTick(firstSubPos.maxPrice);
+    const tickLower = priceToTick(position.minPrice);
+    const tickUpper = priceToTick(position.maxPrice);
 
     mintPosition({
       tickLower,
       tickUpper,
       amount0Desired: BigInt(
-        Math.floor(parseFloat(firstSubPos.amount0 || "0") * 1e18)
+        Math.floor(parseFloat(position.amount0 || "0") * 1e18)
       ),
       amount1Desired: BigInt(
-        Math.floor(parseFloat(firstSubPos.amount1 || "0") * 1e6)
+        Math.floor(parseFloat(position.amount1 || "0") * 1e6)
       ),
       recipient: address,
     });
@@ -174,172 +159,139 @@ export default function Home() {
     router.push(`/position/${tokenId}`);
   };
 
-  // Add a new sub-position by splitting the last position in half
-  const handleAddSubPosition = () => {
-    if (!currentPrice || subPositions.length === 0) return;
+  // // Add a new sub-position by splitting the last position in half
+  // const handleAddSubPosition = () => {
+  //   if (!currentPrice || !position) return;
 
-    // Get the last position to split
-    const lastPos = subPositions[subPositions.length - 1];
-    const midPrice = (lastPos.minPrice + lastPos.maxPrice) / 2;
+  //   // Get the last position to split
+  //   const lastPos = subPositions[subPositions.length - 1];
+  //   const midPrice = (lastPos.minPrice + lastPos.maxPrice) / 2;
 
-    // Update the last position to end at midpoint
-    const updatedLastPos: SubPosition = {
-      ...lastPos,
-      maxPrice: midPrice,
-      amount0: "",
-      amount1: "",
-      lastInputToken: null,
-    };
+  //   // Update the last position to end at midpoint
+  //   const updatedLastPos: SubPosition = {
+  //     ...lastPos,
+  //     maxPrice: midPrice,
+  //     amount0: "",
+  //     amount1: "",
+  //     lastInputToken: null,
+  //   };
 
-    // Create new position from midpoint to the original max
-    const newId = (subPositions.length + 1).toString();
-    const newSubPosition: SubPosition = {
-      id: newId,
-      minPrice: midPrice,
-      maxPrice: lastPos.maxPrice,
-      amount0: "",
-      amount1: "",
-      lastInputToken: null,
-    };
+  //   // Create new position from midpoint to the original max
+  //   const newId = (subPositions.length + 1).toString();
+  //   const newSubPosition: SubPosition = {
+  //     id: newId,
+  //     minPrice: midPrice,
+  //     maxPrice: lastPos.maxPrice,
+  //     amount0: "",
+  //     amount1: "",
+  //     lastInputToken: null,
+  //   };
 
-    // Update state with modified last position and new position
-    setSubPositions([
-      ...subPositions.slice(0, -1),
-      updatedLastPos,
-      newSubPosition,
-    ]);
-  };
+  //   // Update state with modified last position and new position
+  //   setSubPositions([
+  //     ...subPositions.slice(0, -1),
+  //     updatedLastPos,
+  //     newSubPosition,
+  //   ]);
+  // };
 
   // Remove a sub-position and merge with adjacent position
-  const handleRemoveSubPosition = (id: string) => {
-    if (subPositions.length === 1) return; // Don't remove the last one
+  // const handleRemoveSubPosition = (id: string) => {
+  //   if (subPositions.length === 1) return; // Don't remove the last one
 
-    const posIdx = subPositions.findIndex((sp) => sp.id === id);
-    if (posIdx === -1) return;
+  //   const posIdx = subPositions.findIndex((sp) => sp.id === id);
+  //   if (posIdx === -1) return;
 
-    // If removing the last position, extend the previous position to cover its range
-    if (posIdx === subPositions.length - 1) {
-      const prevPos = subPositions[posIdx - 1];
-      const removedPos = subPositions[posIdx];
+  //   // If removing the last position, extend the previous position to cover its range
+  //   if (posIdx === subPositions.length - 1) {
+  //     const prevPos = subPositions[posIdx - 1];
+  //     const removedPos = subPositions[posIdx];
 
-      const extendedPrevPos: SubPosition = {
-        ...prevPos,
-        maxPrice: removedPos.maxPrice,
-        amount0: "",
-        amount1: "",
-        lastInputToken: null,
-      };
+  //     const extendedPrevPos: SubPosition = {
+  //       ...prevPos,
+  //       maxPrice: removedPos.maxPrice,
+  //       amount0: "",
+  //       amount1: "",
+  //       lastInputToken: null,
+  //     };
 
-      setSubPositions([
-        ...subPositions.slice(0, posIdx - 1),
-        extendedPrevPos,
-      ]);
-    } else {
-      // Otherwise, extend the next position to cover the removed position's range
-      const removedPos = subPositions[posIdx];
-      const nextPos = subPositions[posIdx + 1];
+  //     setSubPositions([...subPositions.slice(0, posIdx - 1), extendedPrevPos]);
+  //   } else {
+  //     // Otherwise, extend the next position to cover the removed position's range
+  //     const removedPos = subPositions[posIdx];
+  //     const nextPos = subPositions[posIdx + 1];
 
-      const extendedNextPos: SubPosition = {
-        ...nextPos,
-        minPrice: removedPos.minPrice,
-        amount0: "",
-        amount1: "",
-        lastInputToken: null,
-      };
+  //     const extendedNextPos: SubPosition = {
+  //       ...nextPos,
+  //       minPrice: removedPos.minPrice,
+  //       amount0: "",
+  //       amount1: "",
+  //       lastInputToken: null,
+  //     };
 
-      setSubPositions([
-        ...subPositions.slice(0, posIdx),
-        extendedNextPos,
-        ...subPositions.slice(posIdx + 2),
-      ]);
-    }
-  };
+  //     setSubPositions([
+  //       ...subPositions.slice(0, posIdx),
+  //       extendedNextPos,
+  //       ...subPositions.slice(posIdx + 2),
+  //     ]);
+  //   }
+  // };
 
-  // Update sub-position range
-  const updateSubPositionRange = (
-    id: string,
-    minPrice: number,
-    maxPrice: number
-  ) => {
-    setSubPositions((prevPositions) =>
-      prevPositions.map((sp) =>
-        sp.id === id ? { ...sp, minPrice, maxPrice } : sp
-      )
-    );
-  };
+  // // Update sub-position range
+  // const updateSubPositionRange = (
+  //   id: string,
+  //   minPrice: number,
+  //   maxPrice: number
+  // ) => {
+  //   setSubPositions((prevPositions) =>
+  //     prevPositions.map((sp) =>
+  //       sp.id === id ? { ...sp, minPrice, maxPrice } : sp
+  //     )
+  //   );
+  // };
 
   // Bulk update multiple sub-position ranges atomically
-  const bulkUpdateSubPositionRanges = (
-    updates: Array<{ id: string; minPrice: number; maxPrice: number }>
-  ) => {
-    setSubPositions((prevPositions) =>
-      prevPositions.map((sp) => {
-        const update = updates.find((u) => u.id === sp.id);
-        return update
-          ? { ...sp, minPrice: update.minPrice, maxPrice: update.maxPrice }
-          : sp;
-      })
-    );
-  };
-
-  // Calculate position type based on current price and range
-  const getPositionType = (
-    minPrice: number,
-    maxPrice: number
-  ): "both" | "only-eth" | "only-usdc" | "unknown" => {
-    if (!currentPrice || !minPrice || !maxPrice) return "unknown";
-
-    if (minPrice > currentPrice) {
-      // Entire range above current price - only ETH needed
-      return "only-eth";
-    } else if (maxPrice < currentPrice) {
-      // Entire range below current price - only USDC needed
-      return "only-usdc";
-    } else {
-      // Price within range - both tokens needed
-      return "both";
-    }
-  };
+  // const bulkUpdateSubPositionRanges = (
+  //   updates: Array<{ id: string; minPrice: number; maxPrice: number }>
+  // ) => {
+  //   setSubPositions((prevPositions) =>
+  //     prevPositions.map((sp) => {
+  //       const update = updates.find((u) => u.id === sp.id);
+  //       return update
+  //         ? { ...sp, minPrice: update.minPrice, maxPrice: update.maxPrice }
+  //         : sp;
+  //     })
+  //   );
+  // };
 
   // Auto-calculate corresponding token amount using Position SDK
-  const handleAmount0Change = async (subPosId: string, value: string) => {
-    // Update the sub-position with new amount0 and mark ETH as last input
-    setSubPositions((prevPositions) =>
-      prevPositions.map((sp) =>
-        sp.id === subPosId
-          ? { ...sp, amount0: value, lastInputToken: "eth" as const }
-          : sp
-      )
-    );
+  const handleAmount0Change = async (value: string) => {
+    // Update the position with new amount0 and mark ETH as last input
+    setPosition((prevPosition) => ({
+      ...prevPosition,
+      amount0: value,
+      lastInputToken: "eth" as const,
+    }));
 
-    const subPos = subPositions.find((sp) => sp.id === subPosId);
-    if (!subPos || !value || !currentPrice) {
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount1: "" } : sp
-        )
-      );
+    if (!position || !value || !currentPrice) {
+      setPosition((prevPosition) => ({ ...prevPosition, amount1: "" }));
       return;
     }
 
-    const positionType = getPositionType(subPos.minPrice, subPos.maxPrice);
-    if (positionType === "only-eth") {
+    const positionType = getPositionType(
+      position.minPrice,
+      position.maxPrice,
+      currentPrice
+    );
+    if (positionType === PositionType.ONLY_ETH) {
       // Single-sided ETH only
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount1: "" } : sp
-        )
-      );
+      setPosition((prevPosition) => ({ ...prevPosition, amount1: "" }));
       return;
     }
 
     if (positionType === "only-usdc") {
       // Single-sided USDC only - shouldn't provide ETH
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount0: "" } : sp
-        )
-      );
+      setPosition((prevPosition) => ({ ...prevPosition, amount0: "" }));
       return;
     }
 
@@ -359,8 +311,8 @@ export default function Home() {
         poolInfo.tick
       );
 
-      const tickLower = priceToTick(subPos.minPrice);
-      const tickUpper = priceToTick(subPos.maxPrice);
+      const tickLower = priceToTick(position.minPrice);
+      const tickUpper = priceToTick(position.maxPrice);
 
       // Create position from ETH amount to calculate required USDC
       const ethAmount = CurrencyAmount.fromRawAmount(
@@ -368,7 +320,7 @@ export default function Home() {
         Math.floor(parseFloat(value) * 10 ** 18)
       );
 
-      const position = Position.fromAmount0({
+      const newPosition = Position.fromAmount0({
         pool,
         tickLower,
         tickUpper,
@@ -376,55 +328,43 @@ export default function Home() {
         useFullPrecision: true,
       });
 
-      const usdcAmount = parseFloat(position.amount1.toSignificant(6));
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount1: usdcAmount.toFixed(2) } : sp
-        )
-      );
+      const usdcAmount = parseFloat(newPosition.amount1.toSignificant(6));
+      setPosition((prevPosition) => ({
+        ...prevPosition,
+        amount1: usdcAmount.toFixed(2),
+      }));
     } catch (err) {
       console.error("Error calculating amount1:", err);
     }
   };
 
-  const handleAmount1Change = async (subPosId: string, value: string) => {
+  const handleAmount1Change = async (value: string) => {
     // Update the sub-position with new amount1 and mark USDC as last input
-    setSubPositions((prevPositions) =>
-      prevPositions.map((sp) =>
-        sp.id === subPosId
-          ? { ...sp, amount1: value, lastInputToken: "usdc" as const }
-          : sp
-      )
-    );
+    setPosition((prevPosition) => ({
+      ...prevPosition,
+      amount1: value,
+      lastInputToken: "usdc" as const,
+    }));
 
-    const subPos = subPositions.find((sp) => sp.id === subPosId);
-    if (!subPos || !value || !currentPrice) {
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount0: "" } : sp
-        )
-      );
+    if (!position || !value || !currentPrice) {
+      setPosition((prevPosition) => ({ ...prevPosition, amount0: "" }));
       return;
     }
 
-    const positionType = getPositionType(subPos.minPrice, subPos.maxPrice);
-    if (positionType === "only-usdc") {
+    const positionType = getPositionType(
+      position.minPrice,
+      position.maxPrice,
+      currentPrice
+    );
+    if (positionType === PositionType.ONLY_USDC) {
       // Single-sided USDC only
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount0: "" } : sp
-        )
-      );
+      setPosition((prevPosition) => ({ ...prevPosition, amount0: "" }));
       return;
     }
 
     if (positionType === "only-eth") {
       // Single-sided ETH only - shouldn't provide USDC
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount1: "" } : sp
-        )
-      );
+      setPosition((prevPosition) => ({ ...prevPosition, amount1: "" }));
       return;
     }
 
@@ -444,8 +384,8 @@ export default function Home() {
         poolInfo.tick
       );
 
-      const tickLower = priceToTick(subPos.minPrice);
-      const tickUpper = priceToTick(subPos.maxPrice);
+      const tickLower = priceToTick(position.minPrice);
+      const tickUpper = priceToTick(position.maxPrice);
 
       // Create position from USDC amount to calculate required ETH
       const usdcAmount = CurrencyAmount.fromRawAmount(
@@ -453,19 +393,18 @@ export default function Home() {
         Math.floor(parseFloat(value) * 10 ** 6)
       );
 
-      const position = Position.fromAmount1({
+      const newPosition = Position.fromAmount1({
         pool,
         tickLower,
         tickUpper,
         amount1: usdcAmount.quotient,
       });
 
-      const ethAmount = parseFloat(position.amount0.toSignificant(6));
-      setSubPositions((prevPositions) =>
-        prevPositions.map((sp) =>
-          sp.id === subPosId ? { ...sp, amount0: ethAmount.toFixed(6) } : sp
-        )
-      );
+      const ethAmount = parseFloat(newPosition.amount0.toSignificant(6));
+      setPosition((prevPosition) => ({
+        ...prevPosition,
+        amount0: ethAmount.toFixed(6),
+      }));
     } catch (err) {
       console.error("Error calculating amount0:", err);
     }
@@ -510,199 +449,52 @@ export default function Home() {
                 {currentPrice && (
                   <MultiRangePriceSelector
                     currentPrice={currentPrice}
-                    subPositions={subPositions.map((sp) => ({
-                      id: sp.id,
-                      minPrice: sp.minPrice,
-                      maxPrice: sp.maxPrice,
-                    }))}
-                    onRangeChange={updateSubPositionRange}
-                    onBulkRangeChange={bulkUpdateSubPositionRanges}
-                    onAddSubPosition={handleAddSubPosition}
-                    onRemoveSubPosition={handleRemoveSubPosition}
+                    subPositions={[position]}
+                    onRangeChange={(id, minPrice, maxPrice) => {
+                      setPosition((prevPosition) => ({
+                        ...prevPosition,
+                        minPrice,
+                        maxPrice,
+                      }));
+                    }}
+                    onBulkRangeChange={() => {}}
+                    onAddSubPosition={() => {}}
+                    onRemoveSubPosition={() => {}}
                     handleAutoRebalance={(id) => {
-                      const subPos = subPositions.find((sp) => sp.id === id);
-                      if (!subPos) return;
-
                       // Recalculate based on the last input token (the anchor)
-                      if (subPos.lastInputToken === "eth" && subPos.amount0) {
+                      if (
+                        position.lastInputToken === "eth" &&
+                        position.amount0
+                      ) {
                         // ETH is anchored, recalculate USDC
-                        handleAmount0Change(id, subPos.amount0);
+                        handleAmount0Change(position.amount0);
                       } else if (
-                        subPos.lastInputToken === "usdc" &&
-                        subPos.amount1
+                        position.lastInputToken === "usdc" &&
+                        position.amount1
                       ) {
                         // USDC is anchored, recalculate ETH
-                        handleAmount1Change(id, subPos.amount1);
-                      } else if (subPos.amount0) {
+                        handleAmount1Change(position.amount1);
+                      } else if (position.amount0) {
                         // No anchor set, default to ETH
-                        handleAmount0Change(id, subPos.amount0);
+                        handleAmount0Change(position.amount0);
                       }
                     }}
                     tokenSymbol="ETH/USDC"
                   />
                 )}
 
-                {/* Token Deposit Inputs */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <Label className="text-sm font-medium">
-                      Deposit Tokens
-                    </Label>
-                  </div>
-
-                  {subPositions.map((subPos, index) => {
-                    const positionType = getPositionType(
-                      subPos.minPrice,
-                      subPos.maxPrice
-                    );
-
-                    return (
-                      <div key={subPos.id} className="space-y-2">
-                        {subPositions.length > 1 && (
-                          <Label className="text-xs text-muted-foreground">
-                            Position {index + 1}
-                          </Label>
-                        )}
-                        <div className="grid grid-cols-2 gap-3">
-                            {/* ETH Input */}
-                            <div
-                              className={`p-4 bg-card border border-border rounded-lg space-y-2 transition-opacity ${
-                                positionType === "only-usdc"
-                                  ? "opacity-40 pointer-events-none"
-                                  : ""
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <img
-                                    width={24}
-                                    height={24}
-                                    src={ethLogo}
-                                    alt="ETH"
-                                    className="rounded-full"
-                                  />
-                                  <span className="font-semibold">ETH</span>
-                                </div>
-                                {ethBalance && (
-                                  <button
-                                    onClick={() =>
-                                      handleAmount0Change(
-                                        subPos.id,
-                                        parseFloat(
-                                          formatUnits(
-                                            ethBalance.value,
-                                            ethBalance.decimals
-                                          )
-                                        ).toFixed(6)
-                                      )
-                                    }
-                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                  >
-                                    {parseFloat(
-                                      formatUnits(
-                                        ethBalance.value,
-                                        ethBalance.decimals
-                                      )
-                                    ).toFixed(4)}{" "}
-                                    ETH
-                                  </button>
-                                )}
-                              </div>
-                              <Input
-                                type="number"
-                                step="0.000001"
-                                value={subPos.amount0}
-                                onChange={(e) =>
-                                  handleAmount0Change(subPos.id, e.target.value)
-                                }
-                                placeholder="0.0"
-                                className="text-2xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 bg-transparent"
-                              />
-                              {subPos.amount0 && currentPrice && (
-                                <p className="text-sm text-muted-foreground">
-                                  $
-                                  {(
-                                    parseFloat(subPos.amount0) * currentPrice
-                                  ).toLocaleString(undefined, {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
-                                </p>
-                              )}
-                            </div>
-
-                            {/* USDC Input */}
-                            <div
-                              className={`p-4 bg-card border border-border rounded-lg space-y-2 transition-opacity ${
-                                positionType === "only-eth"
-                                  ? "opacity-40 pointer-events-none"
-                                  : ""
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <img
-                                    width={24}
-                                    height={24}
-                                    src={usdcLogo}
-                                    alt="USDC"
-                                    className="rounded-full"
-                                  />
-                                  <span className="font-semibold">USDC</span>
-                                </div>
-                                {usdcBalance && (
-                                  <button
-                                    onClick={() =>
-                                      handleAmount1Change(
-                                        subPos.id,
-                                        parseFloat(
-                                          formatUnits(
-                                            usdcBalance.value,
-                                            usdcBalance.decimals
-                                          )
-                                        ).toFixed(2)
-                                      )
-                                    }
-                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                  >
-                                    {parseFloat(
-                                      formatUnits(
-                                        usdcBalance.value,
-                                        usdcBalance.decimals
-                                      )
-                                    ).toFixed(2)}{" "}
-                                    USDC
-                                  </button>
-                                )}
-                              </div>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                value={subPos.amount1}
-                                onChange={(e) =>
-                                  handleAmount1Change(subPos.id, e.target.value)
-                                }
-                                placeholder="0.0"
-                                className="text-2xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 bg-transparent"
-                              />
-                              {subPos.amount1 && (
-                                <p className="text-sm text-muted-foreground">
-                                  $
-                                  {parseFloat(subPos.amount1).toLocaleString(
-                                    undefined,
-                                    {
-                                      minimumFractionDigits: 2,
-                                      maximumFractionDigits: 2,
-                                    }
-                                  )}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                    );
-                  })}
-                </div>
+                <DepositTokens
+                  positionType={getPositionType(
+                    position.minPrice,
+                    position.maxPrice,
+                    currentPrice ?? 0
+                  )}
+                  handleAmount0Change={handleAmount0Change}
+                  handleAmount1Change={handleAmount1Change}
+                  amount0={position.amount0}
+                  amount1={position.amount1}
+                  currentPrice={currentPrice ?? 0}
+                />
 
                 <Button
                   onClick={handleCreatePosition}

@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import Web3Provider from "@/providers/Web3Provider";
 import "./globals.css";
 import { UniswapProvider } from "@/providers/UniswapProvider";
+import { AppStateProvider } from "@/providers/AppStateProvider";
 
 const notoSans = Noto_Sans({
   variable: "--font-noto-sans",
@@ -37,7 +38,9 @@ export default async function RootLayout({
         className={`${notoSans.variable} ${geistMono.variable} antialiased`}
       >
         <Web3Provider cookies={cookies}>
-          <UniswapProvider>{children}</UniswapProvider>
+          <AppStateProvider>
+            <UniswapProvider>{children}</UniswapProvider>
+          </AppStateProvider>
         </Web3Provider>
       </body>
     </html>

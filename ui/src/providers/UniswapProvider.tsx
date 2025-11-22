@@ -317,6 +317,8 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
         hookData: "0x",
       };
 
+      //Now I need tick lower, tick upper, and liquidity to add
+
       console.log("mintOptions:", mintOptions);
 
       // 5. Generate transaction calldata using SDK
