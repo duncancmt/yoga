@@ -2,9 +2,10 @@
 
 import { useGetPortfolio } from '@/services/octav/loader';
 
-export default function Portfolio() {
+export default function Portfolio({ ownerAddress = '0x6426af179aabebe47666f345d69fd9079673f6cd' } ) {
   const { data, isLoading, error } = useGetPortfolio({
-    address: '0x6426af179aabebe47666f345d69fd9079673f6cd',
+    // address: '0x6426af179aabebe47666f345d69fd9079673f6cd',
+    address: ownerAddress,
     includeImages: true,
     includeExplorerUrls: true,
     waitForSync: true,

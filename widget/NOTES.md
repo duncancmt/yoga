@@ -1,0 +1,8 @@
+Wallet has Uniswap v4 LP position
+from https://app.uniswap.org/explore/pools/ethereum/0xdce6394339af00981949f5f3baf27e3610c76326a700af57e4b3e3ae4977f78d
+
+Large account:
+0xae2Fc483527B8EF99EB5D9B44875F005ba1FaE13
+
+Smaller account:
+0xbA85a470abAB9A283E7EfeB7BfA30ae04f6067fA

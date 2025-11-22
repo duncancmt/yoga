@@ -35,7 +35,7 @@ export default function Uniswap4Positions({ ownerAddress = '0x6426af179aabebe476
 
   return (
     <div className="p-4 border border-gray-300 bg-gray-50 rounded-md">
-      <p className="font-semibold text-gray-800">Uniswap v4 LP positions for {data?.address}</p>
+      <p className="font-semibold text-gray-800">Uniswap v4 LP positions</p>
       {uniswapValue != null ? (
         <>
           <p className="text-gray-600">Total value: ${uniswapValue}</p>

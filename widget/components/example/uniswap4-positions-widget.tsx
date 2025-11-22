@@ -2,12 +2,13 @@
 
 import { useState } from 'react';
 import Uniswap4Positions from './uniswap4-positions';
+import Portfolio from './portfolio';
 
 type Props = {
   initialAddress?: string;
 };
 
-export default function Uniswap4PositionsClient({ initialAddress = '0x6426af179aabebe47666f345d69fd9079673f6cd' }: Props) {
+export default function Uniswap4PositionsWidget({ initialAddress = '0xbA85a470abAB9A283E7EfeB7BfA30ae04f6067fA' }: Props) {
   const [ownerAddress, setOwnerAddress] = useState(initialAddress);
 
   return (
@@ -22,6 +23,7 @@ export default function Uniswap4PositionsClient({ initialAddress = '0x6426af179a
         />
       </label>
 
+      <Portfolio ownerAddress={ownerAddress} />
       <Uniswap4Positions ownerAddress={ownerAddress} />
     </div>
   );
