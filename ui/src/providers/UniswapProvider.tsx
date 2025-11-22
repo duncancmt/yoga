@@ -5,7 +5,13 @@ import { useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { createPublicClient, http } from "viem";
 import { unichain } from "viem/chains";
 import { Token, ChainId, Ether, Percent, Price } from "@uniswap/sdk-core";
-import { Pool, Position, V4PositionManager, priceToClosestTick, tickToPrice } from "@uniswap/v4-sdk";
+import {
+  Pool,
+  Position,
+  V4PositionManager,
+  priceToClosestTick,
+  tickToPrice,
+} from "@uniswap/v4-sdk";
 import { nearestUsableTick } from "@uniswap/v3-sdk";
 import { STATE_VIEW_ABI } from "../config/abis";
 
@@ -60,6 +66,9 @@ export interface PositionDetails {
   tickLower: number;
   tickUpper: number;
   liquidity: bigint;
+  amount0: number;
+  amount1: number;
+  totalValueUsd: number;
   poolKey: {
     currency0: `0x${string}`;
     currency1: `0x${string}`;
@@ -223,14 +232,11 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
   const priceToTickFn = (price: number): number => {
     // Create a Price object representing USDC per ETH
     const baseAmount = (10 ** ETH_NATIVE.decimals).toString();
-    const quoteAmount = Math.floor(price * 10 ** USDC_TOKEN.decimals).toString();
+    const quoteAmount = Math.floor(
+      price * 10 ** USDC_TOKEN.decimals
+    ).toString();
 
-    const priceObj = new Price(
-      ETH_NATIVE,
-      USDC_TOKEN,
-      baseAmount,
-      quoteAmount
-    );
+    const priceObj = new Price(ETH_NATIVE, USDC_TOKEN, baseAmount, quoteAmount);
 
     // Get closest tick and ensure it's aligned with tick spacing
     const tick = priceToClosestTick(priceObj);
@@ -479,12 +485,49 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
       // Decode packed position info
       const positionInfo = decodePositionInfo(infoValue);
 
+      // Fetch pool info to compute actual token balances
+      const poolInfo = await getPoolInfo();
+      if (!poolInfo) {
+        throw new Error("Failed to fetch pool info");
+      }
+      const pool = new Pool(
+        ETH_NATIVE,
+        USDC_TOKEN,
+        FEE,
+        TICK_SPACING,
+        HOOKS,
+        poolInfo.sqrtPriceX96.toString(),
+        poolInfo.liquidity.toString(),
+        poolInfo.tick
+      );
+
+      const position = new Position({
+        pool,
+        tickLower: positionInfo.getTickLower(),
+        tickUpper: positionInfo.getTickUpper(),
+        liquidity: liquidity.toString(),
+      });
+
+      const amount0 = parseFloat(position.amount0.toExact());
+      const amount1 = parseFloat(position.amount1.toExact());
+
+      const priceUsd = await getCurrentPrice(); // USDC per ETH
+
+      if (!priceUsd) {
+        throw new Error("Failed to fetch current price");
+      }
+
+      const totalValueUsd = amount0 * priceUsd + amount1;
+
       return {
         tokenId,
         tickLower: positionInfo.getTickLower(),
         tickUpper: positionInfo.getTickUpper(),
         liquidity,
         poolKey,
+        amount0,
+        amount1,
+        totalValueUsd,
       };
     } catch (err) {
       console.error(`Error fetching details for position ${tokenId}:`, err);
