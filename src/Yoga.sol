@@ -160,6 +160,7 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                 revert NegativeLiquidity();
             }
 
+            // add new liquidity beyond the current left terminus of the tick ranges
             subPositions.insert(_tickToTreeKey(params.tickLower));
             SimpleModifyLiquidityParams memory i = actions[0];
             i.tickLower = params.tickLower;
@@ -167,19 +168,32 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
             i.liquidityDelta = params.liquidityDelta;
             actions.truncate(1);
         } else if ((leftTick = _treeKeyToTick(leftTickPtr.value())) == params.tickLower) {
-            // TODO: handle the condition where both `params.tickLower` and `params.tickUpper` are already in the tree
-
-            subPositions.insert(_tickToTreeKey(rightTick = params.tickUpper));
-
             if ((rightTickPtr = leftTick.next()) == 0) {
                 if (params.liquidityDelta < 0) {
                     revert NegativeLiquidity();
                 }
 
-                actions[0] = params;
+                // add new liquidity beyond the current right terminus of the tick ranges
+                subPositions.insert(_tickToTreeKey(rightTick = params.tickUpper));
+                SimpleModifyLiquidityParams memory i = actions[0];
+                i.tickLower = params.tickLower;
+                i.tickUpper = params.tickUpper;
+                i.liquidityDelta = params.liquidityDelta;
                 actions.truncate(1);
+            } else if ((rightTick = _treeKeyToTick(rightTickPtr.value())) == params.tickUpper) {
+                // the liquidity modification happens exactly on an existing
+                // range of ticks. we don't need to mutate the tree at all
+
+                // TODO:
             } else {
-                rightTick = _treeKeyToTick(rightTickPtr.value());
+                // split the existing position that ranges from
+                // `params.tickLower` to `rightTick` into two new positions that
+                // range from `params.tickLower` to `params.tickUpper` and from
+                // `params.tickUpper` to `rightTick` and then mutate the
+                // liquidity in the range `params.tickLower` to
+                // `params.tickUpper`
+
+                subPositions.insert(_tickToTreeKey(rightTick = params.tickUpper));
                 uint256 beforeLiquidity = _getLiquidity(tokenId, key, params.tickLower, rightTick);
                 {
                     SimpleModifyLiquidityParams memory i = actions[0];
@@ -206,9 +220,9 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                     bytes32 beforeTickPtr = leftTickPtr.prev();
                     if (beforeTickPtr == 0) {
                         if (i.liquidityDelta == 0) {
-                            // this is a liquidity removal at the start of the
-                            // range; we no longer need to keep `leftTick` in
-                            // the enumeration
+                            // we completely remove all liquidity from the range
+                            // at the left terminus of the tick ranges. we no
+                            // longer need to keep `leftTick` in the enumeration
                             subPositions.remove(_tickToTreeKey(params.tickLower));
                             actions.truncate(2);
                         }
@@ -220,6 +234,12 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                             _getLiquidity(tokenId, key, beforeTick = _treeKeyToTick(beforeTickPtr.value()), params.tickLower)
                                     == combinedLiquidity = i.liquidityDelta
                         ) {
+                            // the liquidity in the modified range
+                            // [`params.tickLower` `params.tickUpper`] is
+                            // identical to the liquidity in the range to its
+                            // left. combine these two ranges in the tree and
+                            // merge their positions.
+
                             i.tickLower = beforeTick;
 
                             i = actions[3];
@@ -244,8 +264,13 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
         ) {
             revert SplitTooComplicated();
         } else {
-            subPositions.insert(_tickToTreeKey(params.tickLower));
+            // split the existing position that ranges from `leftTick` to
+            // `params.tickUpper` into two new positions that range from
+            // `leftTick` to `params.tickLower` and from `params.tickLower` to
+            // `params.tickUpper` and then mutate the liquidity in the range
+            // `params.tickLower` to `params.tickUpper`
 
+            subPositions.insert(_tickToTreeKey(params.tickLower));
             uint256 beforeLiquidity = _getLiquidity(tokenId, key, leftTick, params.tickUpper);
             {
                 SimpleModifyLiquidityParams memory i = actions[0];
@@ -284,6 +309,12 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                         _getLiquidity(tokenId, key, params..tickUpper, afterTick = _treeKeyToTick(afterTickPtr.value()))
                                 == (combinedLiquidity = i.liquidityDelta)
                     ) {
+                        // the liquidity in the modified range
+                        // [`params.tickLower` `params.tickUpper`] is identical
+                        // to the liquidity in the range to its right. combine
+                        // these two ranges in the tree and merge their
+                        // positions.
+
                         i.tickUpper = afterTick;
 
                         i = actions[3];
