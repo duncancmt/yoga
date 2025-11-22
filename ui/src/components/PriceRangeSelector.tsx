@@ -7,6 +7,7 @@ interface PriceRangeSelectorProps {
   minPrice: number;
   maxPrice: number;
   onRangeChange: (minPrice: number, maxPrice: number) => void;
+  handleAutoRebalance: () => void;
   tokenSymbol?: string;
   // Visual bounds for the chart (defaults to wider range for better UX)
   visualMinBound?: number;
@@ -18,6 +19,7 @@ export function PriceRangeSelector({
   minPrice,
   maxPrice,
   onRangeChange,
+  handleAutoRebalance,
   tokenSymbol = "ETH/USDC",
   visualMinBound,
   visualMaxBound,
@@ -61,11 +63,13 @@ export function PriceRangeSelector({
         const minGap = visualRange * 0.01;
         const newMin = Math.min(newPrice, maxPrice - minGap);
         onRangeChange(Math.max(lowerBound, newMin), maxPrice);
+        handleAutoRebalance();
       } else if (isDragging === "max") {
         // Ensure max doesn't go below min (leave small gap)
         const minGap = visualRange * 0.01;
         const newMax = Math.max(newPrice, minPrice + minGap);
         onRangeChange(minPrice, Math.min(upperBound, newMax));
+        handleAutoRebalance();
       }
     };
 
@@ -80,19 +84,18 @@ export function PriceRangeSelector({
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isDragging, minPrice, maxPrice, visualRange, lowerBound, upperBound, onRangeChange]);
+  }, [
+    isDragging,
+    minPrice,
+    maxPrice,
+    visualRange,
+    lowerBound,
+    upperBound,
+    onRangeChange,
+  ]);
 
   return (
     <div className="space-y-6">
-      {/* Current Price Display */}
-      <div className="text-center space-y-1">
-        <p className="text-sm text-muted-foreground">Current Price</p>
-        <p className="text-3xl font-semibold">
-          ${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </p>
-        <p className="text-xs text-muted-foreground">{tokenSymbol}</p>
-      </div>
-
       {/* Visual Range Selector */}
       <div className="relative">
         <div
@@ -111,18 +114,11 @@ export function PriceRangeSelector({
 
           {/* Current Price Line */}
           <div
-            className="absolute h-full border-l-2 border-dashed border-muted-foreground pointer-events-none z-10"
+            className="absolute h-full border-l-2 brightness-200 border-dashed border-muted-foreground pointer-events-none z-10"
             style={{
               left: `${currentPricePercent}%`,
             }}
-          >
-            {/* Current label at bottom */}
-            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap">
-              <span className="text-xs font-medium text-muted-foreground bg-background/80 px-2 py-1 rounded">
-                Current
-              </span>
-            </div>
-          </div>
+          ></div>
 
           {/* Min Price Handle */}
           <div
@@ -135,7 +131,7 @@ export function PriceRangeSelector({
           >
             <div className="h-full w-1 bg-primary group-hover:w-1.5 transition-all" />
             <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 left-1/2">
-              <div className="w-8 h-16 bg-primary rounded-md border-2 border-background shadow-lg group-hover:scale-110 transition-transform flex items-center justify-center">
+              <div className="w-6 h-10 bg-primary rounded-md border-2 border-background shadow-lg group-hover:scale-110 transition-transform flex items-center justify-center">
                 <div className="flex flex-col gap-1">
                   <div className="w-1 h-1 bg-primary-foreground/60 rounded-full" />
                   <div className="w-1 h-1 bg-primary-foreground/60 rounded-full" />
@@ -156,7 +152,7 @@ export function PriceRangeSelector({
           >
             <div className="h-full w-1 bg-primary group-hover:w-1.5 transition-all" />
             <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 left-1/2">
-              <div className="w-8 h-16 bg-primary rounded-md border-2 border-background shadow-lg group-hover:scale-110 transition-transform flex items-center justify-center">
+              <div className="w-6 h-10 bg-primary rounded-md border-2 border-background shadow-lg group-hover:scale-110 transition-transform flex items-center justify-center">
                 <div className="flex flex-col gap-1">
                   <div className="w-1 h-1 bg-primary-foreground/60 rounded-full" />
                   <div className="w-1 h-1 bg-primary-foreground/60 rounded-full" />
@@ -172,13 +168,31 @@ export function PriceRangeSelector({
           <div className="text-left">
             <p className="text-xs text-muted-foreground">Lower Bound</p>
             <p className="text-sm font-medium">
-              ${lowerBound.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              $
+              {lowerBound.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
             </p>
+          </div>
+          {/* Current Price Display */}
+          <div className="text-center space-y-1">
+            <p className="text-xs text-muted-foreground">Current Price</p>
+            <p className="text-xl font-semibold">
+              $
+              {currentPrice.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </p>
+            {/* <p className="text-xs text-muted-foreground">{tokenSymbol}</p> */}
           </div>
           <div className="text-right">
             <p className="text-xs text-muted-foreground">Upper Bound</p>
             <p className="text-sm font-medium">
-              ${upperBound.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              $
+              {upperBound.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
             </p>
           </div>
         </div>
@@ -188,8 +202,12 @@ export function PriceRangeSelector({
       <div className="grid grid-cols-2 gap-4">
         <div className="p-4 bg-card border border-border rounded-lg">
           <p className="text-xs text-muted-foreground mb-1">Min Price</p>
-          <p className="text-xl font-semibold text-primary">
-            ${minPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          <p className="text-xl font-semibold text-foreground">
+            $
+            {minPrice.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
           </p>
           <p className="text-xs text-muted-foreground mt-1">
             {((minPrice / currentPrice - 1) * 100).toFixed(1)}% from current
@@ -197,8 +215,12 @@ export function PriceRangeSelector({
         </div>
         <div className="p-4 bg-card border border-border rounded-lg">
           <p className="text-xs text-muted-foreground mb-1">Max Price</p>
-          <p className="text-xl font-semibold text-primary">
-            ${maxPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          <p className="text-xl font-semibold text-foreground">
+            $
+            {maxPrice.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
           </p>
           <p className="text-xs text-muted-foreground mt-1">
             +{((maxPrice / currentPrice - 1) * 100).toFixed(1)}% from current
