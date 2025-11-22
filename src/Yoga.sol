@@ -40,8 +40,15 @@ library LibSimpleModifyLiquidityParams {
             mstore(a, l)
         }
     }
+
+    function eq(SimpleModifyLiquidityParams memory a, SimpleModifyLiquidityParams memory b) internal pure returns (bool r) {
+        assembly ("memory-safe") {
+            r := eq(a, b)
+        }
+    }
 }
 
+using LibSimpleModifyLiquidityParams for SimpleModifyLiquidityParams;
 using LibSimpleModifyLiquidityParams for SimpleModifyLiquidityParams[];
 
 library CurrencySafeTransferLib {
@@ -199,6 +206,7 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                 // we're merging ranges
 
                 uint256 beforeLiquidity = _getLiquidity(tokenId, key, leftTick, params.tickUpper);
+                int256 netLiquidity = int256(beforeLiquidity) + params.liquidityDelta;
 
                 SimpleModifyLiquidityParams memory i = actions[0];
                 i.tickLower = params.tickLower;
@@ -213,17 +221,18 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                     }
                 } else {
                     int24 beforeTick;
-                    int256 combinedLiquidity;
-                    if ((combinedLiquidity = _getLiquidity(tokenId, key, beforeTick = _treeKeyToTick(beforeTickPtr.value()), params.tickLower)) == int256(beforeLiquidity) + i.liquidityDelta) {
-                        i.tickLower = beforeTick;
-                        i.liquidityDelta = combinedLiquidity;
+                    if (_getLiquidity(tokenId, key, beforeTick = _treeKeyToTick(beforeTickPtr.value()), params.tickLower) == netLiquidity) {
+                        i.liquidityDelta = -int256(beforeLiquidity);
 
                         i = actions[1];
                         i.tickLower = beforeTick;
                         i.tickUpper = params.tickLower;
-                        i.liquidityDelta = -combinedLiquidity;
+                        i.liquidityDelta = -netLiquidity;
 
-                        (actions[1], actions[0]) = (actions[0], actions[1]);
+                        i = actions[2];
+                        i.tickLower = beforeTick;
+                        i.tickUpper = params.tickUpper;
+                        i.liquidityDelta = netLiquidity;
                     }
                 }
                 bytes32 afterTickPtr = rightTickPtr.next();
@@ -236,7 +245,10 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                         }
                     }
                 } else {
-                    // TODO;
+                    int24 afterTick;
+                    if (_getLiquidity(tokenId, key, params.tickUpper, afterTick = _treeKeyToTick(afterTickPtr.value())) == netLiquidity) {
+                        // TODO:
+                    }
                 }
             } else {
                 // split the existing position that ranges from
