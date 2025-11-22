@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Home } from 'lucide-react';
+import { Home, Laptop } from 'lucide-react';
 
 import { NavItem, NavItems } from '@/components/app-sidebar/nav-items';
 
@@ -20,6 +20,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       url: '/',
       pathname: '/',
       icon: <Home width={20} height={20} className="stroke-[1.5]" />,
+    },
+    {
+      name: 'Create Position',
+      url: 'http://localhost:3000',
+      pathname: '/',
+      icon: <Laptop width={20} height={20} className="stroke-[1.5]" />,
     },
   ];
 
