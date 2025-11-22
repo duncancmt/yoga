@@ -195,13 +195,49 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                 actions.truncate(1);
             } else if ((rightTick = _treeKeyToTick(rightTickPtr.value())) == params.tickUpper) {
                 // the liquidity modification happens exactly on an existing
-                // range of ticks. we don't need to mutate the tree at all
+                // range of ticks. we don't need to mutate the tree, unless
+                // we're merging ranges
+
+                uint256 beforeLiquidity = _getLiquidity(tokenId, key, leftTick, params.tickUpper);
 
                 SimpleModifyLiquidityParams memory i = actions[0];
                 i.tickLower = params.tickLower;
                 i.tickUpper = params.tickUpper;
                 i.liquidityDelta = params.liquidityDelta;
-                actions.truncate(1);
+                // TODO: truncate
+
+                bytes32 beforeTickPtr = leftTickPtr.prev();
+                if (beforeTickPtr == 0) {
+                    if (int256(beforeLiquidity) + i.liquidityDelta == 0) {
+                        subPositions.remove(_tickToTreeKey(params.tickLower));
+                    }
+                } else {
+                    int24 beforeTick;
+                    int256 combinedLiquidity;
+                    if ((combinedLiquidity = _getLiquidity(tokenId, key, beforeTick = _treeKeyToTick(beforeTickPtr.value()), params.tickLower)) == int256(beforeLiquidity) + i.liquidityDelta) {
+                        i.tickLower = beforeTick;
+                        i.liquidityDelta = combinedLiquidity;
+
+                        i = actions[1];
+                        i.tickLower = beforeTick;
+                        i.tickUpper = params.tickLower;
+                        i.liquidityDelta = -combinedLiquidity;
+
+                        (actions[1], actions[0]) = (actions[0], actions[1]);
+                    }
+                }
+                bytes32 afterTickPtr = rightTickPtr.next();
+                if (afterTickPtr == 0) {
+                    if (int256(beforeLiquidity) + i.liquidityDelta == 0) {
+                        subPositions.remove(_tickToTreeKey(params.tickUpper));
+                        if (subPositions.size() == 0) {
+                            delete tokenInfo.key;
+                            _burn(tokenId);
+                        }
+                    }
+                } else {
+                    // TODO;
+                }
             } else {
                 // split the existing position that ranges from
                 // `params.tickLower` to `rightTick` into two new positions that
