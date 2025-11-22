@@ -114,18 +114,16 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
             int24 rightTick = _treeKeyToTick(subPositions.tree.nearestAfter(_tickToTreeKey(params.tickUpper)).value());
             if (rightTick < _MIN_TICK) {
                 // extend position on the right
-
             } else {
                 if (
-                    params.liquidityDelta < 0 &&
-                    StateLibrary.getPositionLiquidity(
-                        POOL_MANAGER,
-                        key.toId(),
-                        Position.calculateePositionKey(address(this), params.tickLower, rightTick, bytes32(tokenid))
-                    ) == uint256(-params.liquidityDelta)
+                    params.liquidityDelta < 0
+                        && StateLibrary.getPositionLiquidity(
+                            POOL_MANAGER,
+                            key.toId(),
+                            Position.calculateePositionKey(address(this), params.tickLower, rightTick, bytes32(tokenid))
+                        ) == uint256(-params.liquidityDelta)
                 ) {
                     // close the left portion of a subposition
-
                 }
                 // mutate subposition on the left (params.tickUpper is the split
                 // point)
@@ -145,18 +143,16 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
 
             if (leftTick < _MIN_TICK) {
                 // extend position on the left
-
             } else {
                 if (
-                    params.liquidityDelta < 0 &&
-                    StateLibrary.getPositionLiquidity(
-                        POOL_MANAGER,
-                        key.toId(),
-                        Position.calculateePositionKey(address(this), leftTick, params.tickUpper, bytes32(tokenid))
-                    ) == uint256(-params.liquidityDelta)
+                    params.liquidityDelta < 0
+                        && StateLibrary.getPositionLiquidity(
+                            POOL_MANAGER,
+                            key.toId(),
+                            Position.calculateePositionKey(address(this), leftTick, params.tickUpper, bytes32(tokenid))
+                        ) == uint256(-params.liquidityDelta)
                 ) {
                     // close the right portion of a subposition
-
                 }
                 // mutate subposition on the right (params.tickLower is the
                 // split point)
