@@ -117,11 +117,12 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
 
             } else {
                 if (
+                    params.liquidityDelta < 0 &&
                     StateLibrary.getPositionLiquidity(
                         POOL_MANAGER,
                         key.toId(),
                         Position.calculateePositionKey(address(this), params.tickLower, rightTick, bytes32(tokenid))
-                    ) == -params.liquidityDelta
+                    ) == uint256(-params.liquidityDelta)
                 ) {
                     // close the left portion of a subposition
 
@@ -147,11 +148,12 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
 
             } else {
                 if (
+                    params.liquidityDelta < 0 &&
                     StateLibrary.getPositionLiquidity(
                         POOL_MANAGER,
                         key.toId(),
                         Position.calculateePositionKey(address(this), leftTick, params.tickUpper, bytes32(tokenid))
-                    ) == -params.liquidityDelta
+                    ) == uint256(-params.liquidityDelta)
                 ) {
                     // close the right portion of a subposition
 
