@@ -167,6 +167,8 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
             i.liquidityDelta = params.liquidityDelta;
             actions.truncate(1);
         } else if ((leftTick = _treeKeyToTick(leftTickPtr.value())) == params.tickLower) {
+            // TODO: handle the condition where both `params.tickLower` and `params.tickUpper` are already in the tree
+
             subPositions.insert(_tickToTreeKey(rightTick = params.tickUpper));
 
             if ((rightTickPtr = leftTick.next()) == 0) {
@@ -177,7 +179,7 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                 actions[0] = params;
                 actions.truncate(1);
             } else {
-                rightTick = _treeKeyToTick(rightTick.value());
+                rightTick = _treeKeyToTick(rightTickPtr.value());
                 uint256 beforeLiquidity = _getLiquidity(tokenId, key, params.tickLower, rightTick);
                 {
                     SimpleModifyLiquidityParams memory i = actions[0];
@@ -201,25 +203,36 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                         revert NegativeLiquidity();
                     }
 
-                    // TODO: delete this range from the enumeration if the liquidity is zero and we're at the end of the range
-
                     bytes32 beforeTickPtr = leftTickPtr.prev();
-                    int24 beforeTick;
-                    int256 combinedLiquidity;
-
-                    if (
-                        beforeTickPtr != 0
-                            && _getLiquidity(tokenId, key, beforeTick = _treeKeyToTick(beforeTickPtr.value()), i.tickLower)
-                                == combinedLiquidity = i.liquidityDelta
-                    ) {
-                        i = actions[3];
-                        i.tickLower = beforeTick;
-                        i.tickUpper = i.tickLower;
-                        i.liquidityDelta = combinedLiquidity;
-
-                        (actions[3], actions[2]) = (actions[2], actions[3]);
+                    if (beforeTickPtr == 0) {
+                        if (i.liquidityDelta == 0) {
+                            // this is a liquidity removal at the start of the
+                            // range; we no longer need to keep `leftTick` in
+                            // the enumeration
+                            subPositions.remove(_tickToTreeKey(params.tickLower));
+                            actions.truncate(2);
+                        }
                     } else {
-                        actions.truncate(3);
+                        int24 beforeTick;
+                        int256 combinedLiquidity;
+
+                        if (
+                            _getLiquidity(tokenId, key, beforeTick = _treeKeyToTick(beforeTickPtr.value()), params.tickLower)
+                                    == combinedLiquidity = i.liquidityDelta
+                        ) {
+                            i.tickLower = beforeTick;
+
+                            i = actions[3];
+                            i.tickLower = beforeTick;
+                            i.tickUpper = params.tickLower;
+                            i.liquidityDelta = -combinedLiquidity;
+
+                            subPositions.remove(_tickToTreeKey(i.tickLower));
+
+                            (actions[3], actions[2]) = (actions[2], actions[3]);
+                        } else {
+                            actions.truncate(3);
+                        }
                     }
                 }
             }
@@ -255,24 +268,35 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                     revert NegativeLiquidity();
                 }
 
-                // TODO: delete this range from the enumeration if the liquidity is zero and we're at the end of the range
-
                 bytes32 afterTickPtr = rightTickPtr.next();
-                int24 afterTick;
-                int256 combinedLiquidity;
-                if (
-                    afterTickPtr != 0
-                        && _getLiquidity(tokenId, key, i.tickUpper, afterTick = _treeKeyToTick(afterTickPtr.value()))
-                            == (combinedLiquidity = i.liquidityDelta)
-                ) {
-                    i = actions[3];
-                    i.tickLower = i.tickUpper;
-                    i.tickUpper = afterTick;
-                    i.liquidityDelta = combinedLiquidity;
-
-                    (actions[3], actions[2]) = (actions[2], actions[3]);
+                if (afterTickPtr == 0) {
+                    if (i.liquidityDelta == 0) {
+                        // this is a liquidity removal at the end of the
+                        // range; we no longer need to keep `rightTick` in
+                        // the enumeration
+                        subPositions.remove(_tickToTreeKey(params.tickUpper));
+                        actions.truncate(2);
+                    }
                 } else {
-                    actions.truncate(3);
+                    int24 afterTick;
+                    int256 combinedLiquidity;
+                    if (
+                        _getLiquidity(tokenId, key, params..tickUpper, afterTick = _treeKeyToTick(afterTickPtr.value()))
+                                == (combinedLiquidity = i.liquidityDelta)
+                    ) {
+                        i.tickUpper = afterTick;
+
+                        i = actions[3];
+                        i.tickLower = params.tickUpper;
+                        i.tickUpper = afterTick;
+                        i.liquidityDelta = -combinedLiquidity;
+
+                        subPositions.remove(_tickToTreeKey(i.tickUpper));
+
+                        (actions[3], actions[2]) = (actions[2], actions[3]);
+                    } else {
+                        actions.truncate(3);
+                    }
                 }
             }
         }
