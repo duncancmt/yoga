@@ -19,12 +19,11 @@ import type {
   MintPositionParams,
   PositionDetails,
 } from "@/providers/UniswapProvider";
-import { PriceRangeSelector } from "@/components/PriceRangeSelector";
+import { MultiRangePriceSelector } from "@/components/MultiRangePriceSelector";
 import ethLogo from "cryptocurrency-icons/svg/color/eth.svg";
 import usdcLogo from "cryptocurrency-icons/svg/color/usdc.svg";
 import { Pool, Position } from "@uniswap/v4-sdk";
 import { Token, Ether, ChainId, CurrencyAmount } from "@uniswap/sdk-core";
-import { nearestUsableTick } from "@uniswap/v3-sdk";
 
 // Token constants
 const ETH_NATIVE = Ether.onChain(ChainId.UNICHAIN);
@@ -56,15 +55,28 @@ export default function Home() {
     error,
   } = useUniswap();
 
+  // Sub-position type
+  interface SubPosition {
+    id: string;
+    minPrice: number;
+    maxPrice: number;
+    amount0: string;
+    amount1: string;
+    lastInputToken: "eth" | "usdc" | null;
+  }
+
   // Price state
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
-  const [minPrice, setMinPrice] = useState<number>(2000); // Default min price
-  const [maxPrice, setMaxPrice] = useState<number>(3500); // Default max price
-  const [amount0Max, setAmount0Max] = useState<string>("");
-  const [amount1Max, setAmount1Max] = useState<string>("");
-  const [lastInputToken, setLastInputToken] = useState<"eth" | "usdc" | null>(
-    null
-  );
+  const [subPositions, setSubPositions] = useState<SubPosition[]>([
+    {
+      id: "1",
+      minPrice: 2000,
+      maxPrice: 3500,
+      amount0: "",
+      amount1: "",
+      lastInputToken: null,
+    },
+  ]);
 
   // Fetch wallet balances
   const { data: ethBalance } = useBalance({
@@ -86,8 +98,16 @@ export default function Home() {
       if (price) {
         setCurrentPrice(price);
         // Set default range to +/- 25% from current price
-        setMinPrice(price * 0.75);
-        setMaxPrice(price * 1.25);
+        setSubPositions([
+          {
+            id: "1",
+            minPrice: price * 0.75,
+            maxPrice: price * 1.25,
+            amount0: "",
+            amount1: "",
+            lastInputToken: null,
+          },
+        ]);
       }
     });
   }, [getCurrentPrice]);
@@ -127,17 +147,25 @@ export default function Home() {
   }, [isConfirmed, address, fetchUserPositions]);
 
   const handleCreatePosition = () => {
-    if (!address) return;
+    if (!address || subPositions.length === 0) return;
+
+    // For now, create position with the first sub-position
+    // TODO: Support creating multiple positions
+    const firstSubPos = subPositions[0];
 
     // Convert prices to ticks
-    const tickLower = priceToTick(minPrice);
-    const tickUpper = priceToTick(maxPrice);
+    const tickLower = priceToTick(firstSubPos.minPrice);
+    const tickUpper = priceToTick(firstSubPos.maxPrice);
 
     mintPosition({
       tickLower,
       tickUpper,
-      amount0Desired: BigInt(Math.floor(parseFloat(amount0Max) * 1e18)),
-      amount1Desired: BigInt(Math.floor(parseFloat(amount1Max) * 1e6)),
+      amount0Desired: BigInt(
+        Math.floor(parseFloat(firstSubPos.amount0 || "0") * 1e18)
+      ),
+      amount1Desired: BigInt(
+        Math.floor(parseFloat(firstSubPos.amount1 || "0") * 1e6)
+      ),
       recipient: address,
     });
   };
@@ -146,8 +174,119 @@ export default function Home() {
     router.push(`/position/${tokenId}`);
   };
 
+  // Add a new sub-position by splitting the last position in half
+  const handleAddSubPosition = () => {
+    if (!currentPrice || subPositions.length === 0) return;
+
+    // Get the last position to split
+    const lastPos = subPositions[subPositions.length - 1];
+    const midPrice = (lastPos.minPrice + lastPos.maxPrice) / 2;
+
+    // Update the last position to end at midpoint
+    const updatedLastPos: SubPosition = {
+      ...lastPos,
+      maxPrice: midPrice,
+      amount0: "",
+      amount1: "",
+      lastInputToken: null,
+    };
+
+    // Create new position from midpoint to the original max
+    const newId = (subPositions.length + 1).toString();
+    const newSubPosition: SubPosition = {
+      id: newId,
+      minPrice: midPrice,
+      maxPrice: lastPos.maxPrice,
+      amount0: "",
+      amount1: "",
+      lastInputToken: null,
+    };
+
+    // Update state with modified last position and new position
+    setSubPositions([
+      ...subPositions.slice(0, -1),
+      updatedLastPos,
+      newSubPosition,
+    ]);
+  };
+
+  // Remove a sub-position and merge with adjacent position
+  const handleRemoveSubPosition = (id: string) => {
+    if (subPositions.length === 1) return; // Don't remove the last one
+
+    const posIdx = subPositions.findIndex((sp) => sp.id === id);
+    if (posIdx === -1) return;
+
+    // If removing the last position, extend the previous position to cover its range
+    if (posIdx === subPositions.length - 1) {
+      const prevPos = subPositions[posIdx - 1];
+      const removedPos = subPositions[posIdx];
+
+      const extendedPrevPos: SubPosition = {
+        ...prevPos,
+        maxPrice: removedPos.maxPrice,
+        amount0: "",
+        amount1: "",
+        lastInputToken: null,
+      };
+
+      setSubPositions([
+        ...subPositions.slice(0, posIdx - 1),
+        extendedPrevPos,
+      ]);
+    } else {
+      // Otherwise, extend the next position to cover the removed position's range
+      const removedPos = subPositions[posIdx];
+      const nextPos = subPositions[posIdx + 1];
+
+      const extendedNextPos: SubPosition = {
+        ...nextPos,
+        minPrice: removedPos.minPrice,
+        amount0: "",
+        amount1: "",
+        lastInputToken: null,
+      };
+
+      setSubPositions([
+        ...subPositions.slice(0, posIdx),
+        extendedNextPos,
+        ...subPositions.slice(posIdx + 2),
+      ]);
+    }
+  };
+
+  // Update sub-position range
+  const updateSubPositionRange = (
+    id: string,
+    minPrice: number,
+    maxPrice: number
+  ) => {
+    setSubPositions((prevPositions) =>
+      prevPositions.map((sp) =>
+        sp.id === id ? { ...sp, minPrice, maxPrice } : sp
+      )
+    );
+  };
+
+  // Bulk update multiple sub-position ranges atomically
+  const bulkUpdateSubPositionRanges = (
+    updates: Array<{ id: string; minPrice: number; maxPrice: number }>
+  ) => {
+    setSubPositions((prevPositions) =>
+      prevPositions.map((sp) => {
+        const update = updates.find((u) => u.id === sp.id);
+        return update
+          ? { ...sp, minPrice: update.minPrice, maxPrice: update.maxPrice }
+          : sp;
+      })
+    );
+  };
+
   // Calculate position type based on current price and range
-  const getPositionType = (): "both" | "only-eth" | "only-usdc" | "unknown" => {
+  const getPositionType = (
+    minPrice: number,
+    maxPrice: number
+  ): "both" | "only-eth" | "only-usdc" | "unknown" => {
     if (!currentPrice || !minPrice || !maxPrice) return "unknown";
 
     if (minPrice > currentPrice) {
@@ -163,25 +302,44 @@ export default function Home() {
   };
 
   // Auto-calculate corresponding token amount using Position SDK
-  const handleAmount0Change = async (value: string) => {
-    setAmount0Max(value);
-    setLastInputToken("eth"); // Mark ETH as the last input
+  const handleAmount0Change = async (subPosId: string, value: string) => {
+    // Update the sub-position with new amount0 and mark ETH as last input
+    setSubPositions((prevPositions) =>
+      prevPositions.map((sp) =>
+        sp.id === subPosId
+          ? { ...sp, amount0: value, lastInputToken: "eth" as const }
+          : sp
+      )
+    );
 
-    if (!value || !currentPrice || !minPrice || !maxPrice) {
-      setAmount1Max("");
+    const subPos = subPositions.find((sp) => sp.id === subPosId);
+    if (!subPos || !value || !currentPrice) {
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount1: "" } : sp
+        )
+      );
       return;
     }
 
-    const positionType = getPositionType();
+    const positionType = getPositionType(subPos.minPrice, subPos.maxPrice);
     if (positionType === "only-eth") {
       // Single-sided ETH only
-      setAmount1Max("");
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount1: "" } : sp
+        )
+      );
       return;
     }
 
     if (positionType === "only-usdc") {
       // Single-sided USDC only - shouldn't provide ETH
-      setAmount0Max("");
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount0: "" } : sp
+        )
+      );
       return;
     }
 
@@ -201,8 +359,8 @@ export default function Home() {
         poolInfo.tick
       );
 
-      const tickLower = priceToTick(minPrice);
-      const tickUpper = priceToTick(maxPrice);
+      const tickLower = priceToTick(subPos.minPrice);
+      const tickUpper = priceToTick(subPos.maxPrice);
 
       // Create position from ETH amount to calculate required USDC
       const ethAmount = CurrencyAmount.fromRawAmount(
@@ -219,31 +377,54 @@ export default function Home() {
       });
 
       const usdcAmount = parseFloat(position.amount1.toSignificant(6));
-      setAmount1Max(usdcAmount.toFixed(2));
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount1: usdcAmount.toFixed(2) } : sp
+        )
+      );
     } catch (err) {
       console.error("Error calculating amount1:", err);
     }
   };
 
-  const handleAmount1Change = async (value: string) => {
-    setAmount1Max(value);
-    setLastInputToken("usdc"); // Mark USDC as the last input
+  const handleAmount1Change = async (subPosId: string, value: string) => {
+    // Update the sub-position with new amount1 and mark USDC as last input
+    setSubPositions((prevPositions) =>
+      prevPositions.map((sp) =>
+        sp.id === subPosId
+          ? { ...sp, amount1: value, lastInputToken: "usdc" as const }
+          : sp
+      )
+    );
 
-    if (!value || !currentPrice || !minPrice || !maxPrice) {
-      setAmount0Max("");
+    const subPos = subPositions.find((sp) => sp.id === subPosId);
+    if (!subPos || !value || !currentPrice) {
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount0: "" } : sp
+        )
+      );
       return;
     }
 
-    const positionType = getPositionType();
+    const positionType = getPositionType(subPos.minPrice, subPos.maxPrice);
     if (positionType === "only-usdc") {
       // Single-sided USDC only
-      setAmount0Max("");
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount0: "" } : sp
+        )
+      );
       return;
     }
 
     if (positionType === "only-eth") {
       // Single-sided ETH only - shouldn't provide USDC
-      setAmount1Max("");
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount1: "" } : sp
+        )
+      );
       return;
     }
 
@@ -263,8 +444,8 @@ export default function Home() {
         poolInfo.tick
       );
 
-      const tickLower = priceToTick(minPrice);
-      const tickUpper = priceToTick(maxPrice);
+      const tickLower = priceToTick(subPos.minPrice);
+      const tickUpper = priceToTick(subPos.maxPrice);
 
       // Create position from USDC amount to calculate required ETH
       const usdcAmount = CurrencyAmount.fromRawAmount(
@@ -280,7 +461,11 @@ export default function Home() {
       });
 
       const ethAmount = parseFloat(position.amount0.toSignificant(6));
-      setAmount0Max(ethAmount.toFixed(6));
+      setSubPositions((prevPositions) =>
+        prevPositions.map((sp) =>
+          sp.id === subPosId ? { ...sp, amount0: ethAmount.toFixed(6) } : sp
+        )
+      );
     } catch (err) {
       console.error("Error calculating amount0:", err);
     }
@@ -323,25 +508,34 @@ export default function Home() {
               <div className="grid gap-4">
                 {/* Price Range Selector */}
                 {currentPrice && (
-                  <PriceRangeSelector
+                  <MultiRangePriceSelector
                     currentPrice={currentPrice}
-                    minPrice={minPrice}
-                    maxPrice={maxPrice}
-                    onRangeChange={(min, max) => {
-                      setMinPrice(min);
-                      setMaxPrice(max);
-                    }}
-                    handleAutoRebalance={() => {
+                    subPositions={subPositions.map((sp) => ({
+                      id: sp.id,
+                      minPrice: sp.minPrice,
+                      maxPrice: sp.maxPrice,
+                    }))}
+                    onRangeChange={updateSubPositionRange}
+                    onBulkRangeChange={bulkUpdateSubPositionRanges}
+                    onAddSubPosition={handleAddSubPosition}
+                    onRemoveSubPosition={handleRemoveSubPosition}
+                    handleAutoRebalance={(id) => {
+                      const subPos = subPositions.find((sp) => sp.id === id);
+                      if (!subPos) return;
+
                       // Recalculate based on the last input token (the anchor)
-                      if (lastInputToken === "eth" && amount0Max) {
+                      if (subPos.lastInputToken === "eth" && subPos.amount0) {
                         // ETH is anchored, recalculate USDC
-                        handleAmount0Change(amount0Max);
-                      } else if (lastInputToken === "usdc" && amount1Max) {
+                        handleAmount0Change(id, subPos.amount0);
+                      } else if (
+                        subPos.lastInputToken === "usdc" &&
+                        subPos.amount1
+                      ) {
                         // USDC is anchored, recalculate ETH
-                        handleAmount1Change(amount1Max);
-                      } else if (amount0Max) {
+                        handleAmount1Change(id, subPos.amount1);
+                      } else if (subPos.amount0) {
                         // No anchor set, default to ETH
-                        handleAmount0Change(amount0Max);
+                        handleAmount0Change(id, subPos.amount0);
                       }
                     }}
                     tokenSymbol="ETH/USDC"
@@ -349,137 +543,165 @@ export default function Home() {
                 )}
 
                 {/* Token Deposit Inputs */}
-                <div className="space-y-1">
+                <div className="space-y-4">
                   <div className="flex items-center justify-between mb-2">
                     <Label className="text-sm font-medium">
                       Deposit Tokens
                     </Label>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* ETH Input */}
-                    <div
-                      className={`p-4 bg-card border border-border rounded-lg space-y-2 transition-opacity ${
-                        getPositionType() === "only-usdc"
-                          ? "opacity-40 pointer-events-none"
-                          : ""
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <img
-                            width={24}
-                            height={24}
-                            src={ethLogo}
-                            alt="ETH"
-                            className="rounded-full"
-                          />
-                          <span className="font-semibold">ETH</span>
-                        </div>
-                        {ethBalance && (
-                          <button
-                            onClick={() =>
-                              handleAmount0Change(
-                                parseFloat(
-                                  formatUnits(
-                                    ethBalance.value,
-                                    ethBalance.decimals
-                                  )
-                                ).toFixed(6)
-                              )
-                            }
-                            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            {parseFloat(
-                              formatUnits(ethBalance.value, ethBalance.decimals)
-                            ).toFixed(4)}{" "}
-                            ETH
-                          </button>
-                        )}
-                      </div>
-                      <Input
-                        type="number"
-                        step="0.000001"
-                        value={amount0Max}
-                        onChange={(e) => handleAmount0Change(e.target.value)}
-                        placeholder="0.0"
-                        className="text-2xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 bg-transparent"
-                      />
-                      {amount0Max && currentPrice && (
-                        <p className="text-sm text-muted-foreground">
-                          $
-                          {(
-                            parseFloat(amount0Max) * currentPrice
-                          ).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </p>
-                      )}
-                    </div>
+                  {subPositions.map((subPos, index) => {
+                    const positionType = getPositionType(
+                      subPos.minPrice,
+                      subPos.maxPrice
+                    );
 
-                    {/* USDC Input */}
-                    <div
-                      className={`p-4 bg-card border border-border rounded-lg space-y-2 transition-opacity ${
-                        getPositionType() === "only-eth"
-                          ? "opacity-40 pointer-events-none"
-                          : ""
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <img
-                            width={24}
-                            height={24}
-                            src={usdcLogo}
-                            alt="USDC"
-                            className="rounded-full"
-                          />
-                          <span className="font-semibold">USDC</span>
-                        </div>
-                        {usdcBalance && (
-                          <button
-                            onClick={() =>
-                              handleAmount1Change(
-                                parseFloat(
-                                  formatUnits(
-                                    usdcBalance.value,
-                                    usdcBalance.decimals
-                                  )
-                                ).toFixed(2)
-                              )
-                            }
-                            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            {parseFloat(
-                              formatUnits(
-                                usdcBalance.value,
-                                usdcBalance.decimals
-                              )
-                            ).toFixed(2)}{" "}
-                            USDC
-                          </button>
+                    return (
+                      <div key={subPos.id} className="space-y-2">
+                        {subPositions.length > 1 && (
+                          <Label className="text-xs text-muted-foreground">
+                            Position {index + 1}
+                          </Label>
                         )}
-                      </div>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={amount1Max}
-                        onChange={(e) => handleAmount1Change(e.target.value)}
-                        placeholder="0.0"
-                        className="text-2xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 bg-transparent"
-                      />
-                      {amount1Max && (
-                        <p className="text-sm text-muted-foreground">
-                          $
-                          {parseFloat(amount1Max).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </p>
-                      )}
-                    </div>
-                  </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            {/* ETH Input */}
+                            <div
+                              className={`p-4 bg-card border border-border rounded-lg space-y-2 transition-opacity ${
+                                positionType === "only-usdc"
+                                  ? "opacity-40 pointer-events-none"
+                                  : ""
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <img
+                                    width={24}
+                                    height={24}
+                                    src={ethLogo}
+                                    alt="ETH"
+                                    className="rounded-full"
+                                  />
+                                  <span className="font-semibold">ETH</span>
+                                </div>
+                                {ethBalance && (
+                                  <button
+                                    onClick={() =>
+                                      handleAmount0Change(
+                                        subPos.id,
+                                        parseFloat(
+                                          formatUnits(
+                                            ethBalance.value,
+                                            ethBalance.decimals
+                                          )
+                                        ).toFixed(6)
+                                      )
+                                    }
+                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    {parseFloat(
+                                      formatUnits(
+                                        ethBalance.value,
+                                        ethBalance.decimals
+                                      )
+                                    ).toFixed(4)}{" "}
+                                    ETH
+                                  </button>
+                                )}
+                              </div>
+                              <Input
+                                type="number"
+                                step="0.000001"
+                                value={subPos.amount0}
+                                onChange={(e) =>
+                                  handleAmount0Change(subPos.id, e.target.value)
+                                }
+                                placeholder="0.0"
+                                className="text-2xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 bg-transparent"
+                              />
+                              {subPos.amount0 && currentPrice && (
+                                <p className="text-sm text-muted-foreground">
+                                  $
+                                  {(
+                                    parseFloat(subPos.amount0) * currentPrice
+                                  ).toLocaleString(undefined, {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </p>
+                              )}
+                            </div>
+
+                            {/* USDC Input */}
+                            <div
+                              className={`p-4 bg-card border border-border rounded-lg space-y-2 transition-opacity ${
+                                positionType === "only-eth"
+                                  ? "opacity-40 pointer-events-none"
+                                  : ""
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <img
+                                    width={24}
+                                    height={24}
+                                    src={usdcLogo}
+                                    alt="USDC"
+                                    className="rounded-full"
+                                  />
+                                  <span className="font-semibold">USDC</span>
+                                </div>
+                                {usdcBalance && (
+                                  <button
+                                    onClick={() =>
+                                      handleAmount1Change(
+                                        subPos.id,
+                                        parseFloat(
+                                          formatUnits(
+                                            usdcBalance.value,
+                                            usdcBalance.decimals
+                                          )
+                                        ).toFixed(2)
+                                      )
+                                    }
+                                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                  >
+                                    {parseFloat(
+                                      formatUnits(
+                                        usdcBalance.value,
+                                        usdcBalance.decimals
+                                      )
+                                    ).toFixed(2)}{" "}
+                                    USDC
+                                  </button>
+                                )}
+                              </div>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={subPos.amount1}
+                                onChange={(e) =>
+                                  handleAmount1Change(subPos.id, e.target.value)
+                                }
+                                placeholder="0.0"
+                                className="text-2xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 bg-transparent"
+                              />
+                              {subPos.amount1 && (
+                                <p className="text-sm text-muted-foreground">
+                                  $
+                                  {parseFloat(subPos.amount1).toLocaleString(
+                                    undefined,
+                                    {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    }
+                                  )}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                    );
+                  })}
                 </div>
 
                 <Button
