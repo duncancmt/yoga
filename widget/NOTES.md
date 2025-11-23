@@ -15,3 +15,6 @@ To Do:
 - show current price of pair
 - show if price is in range or out
 - alert user if out of range (future can adjust position automatically)
+
+To generalize later:
+- PoolID's link works for 1 chain (mainnet Ethereum), need to switch RPC

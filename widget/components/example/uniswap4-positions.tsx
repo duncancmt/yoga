@@ -2,6 +2,7 @@
 
 import { ProtocolPosition } from '@/types/portfolio';
 import { useGetPortfolio } from '@/services/octav/loader';
+import PositionCard from './PositionCard';
 
 interface Uniswap4PositionsProps {
   ownerAddress?: string;
@@ -51,21 +52,18 @@ export default function Uniswap4Positions({ ownerAddress = '0x6426af179aabebe476
           <h3 className="text-md font-semibold capitalize mb-2">{chainKey}</h3>
           <p className="text-gray-600">Number of positions: {numOfPositions ?? 0}</p>
           <div className="space-y-2">
-            {positions.map((position: ProtocolPosition, index: number) => (
-              <div key={index} className="p-2 border border-gray-200 rounded-md bg-white">
-                <p className="font-medium text-sm">Position {index + 1}: {position.assets?.[0].symbol}/{position.assets?.[1].symbol}</p>
-                <p className="font-medium text-sm truncate">
-                  NFT:{" "}
-                  <a
-                    href={`https://opensea.io/item/${chainKey}/${position.poolAddress}/${position.name.replace('#', '')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline"
-                  >{`${position.poolAddress}/${position.name.replace('#', '')}`}</a>
-                </p>
-                <p className="text-xs text-gray-500">Value: ${position.value}</p>
-              </div>
-            ))}
+            {positions.map((position: ProtocolPosition, index: number) => {
+              const chainId = Number(data?.chains?.[chainKey]?.chainId);
+              return (
+                <PositionCard
+                  key={index}
+                  position={position}
+                  index={index}
+                  chainKey={chainKey}
+                  chainId={chainId}
+                />
+              );
+            })}
           </div>
         </div>
       );
