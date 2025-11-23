@@ -133,6 +133,8 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
         subPositions.insert(_tickToTreeKey(params.tickLower));
         subPositions.insert(_tickToTreeKey(params.tickUpper));
 
+        _safeMint(msg.sender, tokenId);
+
         SimpleModifyLiquidityParams[] memory paramsArray = new SimpleModifyLiquidityParams[](1);
         paramsArray[0] = params;
         delta = abi.decode(
@@ -147,7 +149,6 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
             revert TooMuchSlippage(key.currency1, currency1Max, uint256(-int256(delta.amount1())));
         }
 
-        _safeMint(msg.sender, tokenId);
         if (address(this).balance != 0) {
             msg.sender.safeTransferAllETH();
         }
@@ -280,7 +281,9 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                             _burn(tokenId);
                         } else {
                             // Check if next range has zero liquidity and would become invalid terminus
-                            if (_getLiquidity(tokenId, key, params.tickUpper, _treeKeyToTick(afterTickPtr.value())) == 0) {
+                            if (
+                                _getLiquidity(tokenId, key, params.tickUpper, _treeKeyToTick(afterTickPtr.value())) == 0
+                            ) {
                                 // Cascade: remove the zero-liquidity range that would be at terminus
                                 subPositions.remove(_tickToTreeKey(params.tickUpper));
                             }
@@ -294,7 +297,10 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
 
                         // Check if previous range has zero liquidity and would become invalid terminus
                         if (beforeTickPtr != 0) {
-                            if (_getLiquidity(tokenId, key, _treeKeyToTick(beforeTickPtr.value()), params.tickLower) == 0) {
+                            if (
+                                _getLiquidity(tokenId, key, _treeKeyToTick(beforeTickPtr.value()), params.tickLower)
+                                    == 0
+                            ) {
                                 // Cascade: remove the zero-liquidity range that would be at terminus
                                 subPositions.remove(_tickToTreeKey(params.tickLower));
                             }
@@ -440,11 +446,7 @@ contract Yoga is IERC165, IUnlockCallback, ERC721, /*, MultiCallContext */ Reent
                     }
                 }
             }
-        } else if (
-            (
-                rightTick = _treeKeyToTick((rightTickPtr = leftTickPtr.next()).value())
-            ) != params.tickUpper
-        ) {
+        } else if ((rightTick = _treeKeyToTick((rightTickPtr = leftTickPtr.next()).value())) != params.tickUpper) {
             revert SplitTooComplicated();
         } else {
             // split the existing position that ranges from `leftTick` to

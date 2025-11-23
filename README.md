@@ -6,5 +6,5 @@
 * Support for hooks that require hookData
 * Clean up `_populateActions`
 * Stateful invariant testing
-* `burn` with pagination
-* Fance `tokenURI` images
+* `burn` (with pagination for gas limits)
+* Fancy `tokenURI` images
