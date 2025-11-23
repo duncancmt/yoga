@@ -1,33 +1,45 @@
 import { Label } from "@radix-ui/react-label";
 import { Plus, Minus } from "lucide-react";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import { Input } from "./ui/input";
+import DepositTokens from "./DepositTokens";
+import { getPositionType } from "@/lib/utils";
+import { Position, useUniswap } from "@/providers/UniswapProvider";
+import { useParams } from "next/navigation";
 
 interface SubPositionProps {
   index: number;
-  minPrice: number;
-  maxPrice: number;
+  position: Position;
   currentPrice: number;
 }
 
-const SubPosition = ({
-  index,
-  minPrice,
-  maxPrice,
-  currentPrice,
-}: SubPositionProps) => {
+const SubPosition = ({ index, position, currentPrice }: SubPositionProps) => {
   const [editMode, setEditMode] = useState<"add" | "remove" | null>(null);
   const [amount0, setAmount0] = useState("");
   const [amount1, setAmount1] = useState("");
   const [removePercentage, setRemovePercentage] = useState("50");
+  const { tokenId } = useParams();
+
+  const { addLiquidity, removeLiquidity, priceToTick, isConfirmed } =
+    useUniswap();
+
+  useEffect(() => {
+    if (isConfirmed) {
+      setEditMode(null);
+    }
+  }, [isConfirmed]);
+
   return (
     <div>
       <Card key={index} className="border-2">
         <CardContent className="p-4">
           <div className="flex items-center justify-between mb-3">
             <h4 className="font-semibold">Sub-Position {index + 1}</h4>
+            {/* <p className="text-sm font-medium">
+              Size: {position.positionValue}
+            </p> */}
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -55,17 +67,18 @@ const SubPosition = ({
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div className="p-3 bg-muted rounded-lg">
               <p className="text-xs text-muted-foreground">Min Price</p>
-              <p className="font-medium">${minPrice.toFixed(2)}</p>
+              <p className="font-medium">${position.minPrice.toFixed(2)}</p>
               <p className="text-xs text-muted-foreground">
-                {((minPrice / currentPrice - 1) * 100).toFixed(1)}% from current
+                {((position.minPrice / currentPrice - 1) * 100).toFixed(1)}%
+                from current
               </p>
             </div>
             <div className="p-3 bg-muted rounded-lg">
               <p className="text-xs text-muted-foreground">Max Price</p>
-              <p className="font-medium">${maxPrice.toFixed(2)}</p>
+              <p className="font-medium">${position.maxPrice.toFixed(2)}</p>
               <p className="text-xs text-muted-foreground">
-                +{((maxPrice / currentPrice - 1) * 100).toFixed(1)}% from
-                current
+                +{((position.maxPrice / currentPrice - 1) * 100).toFixed(1)}%
+                from current
               </p>
             </div>
           </div>
@@ -74,44 +87,41 @@ const SubPosition = ({
           {editMode === "add" && (
             <div className="mt-4 p-4 bg-muted/50 rounded-lg space-y-3">
               <h5 className="font-medium text-sm">Add Liquidity</h5>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label htmlFor={`edit-amount0-${index}`} className="text-xs">
-                    ETH Amount
-                  </Label>
-                  <Input
-                    id={`edit-amount0-${index}`}
-                    type="number"
-                    step="0.0001"
-                    value={amount0}
-                    onChange={(e) => setAmount0(e.target.value)}
-                    placeholder="0.001"
-                    className="h-9"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor={`edit-amount1-${index}`} className="text-xs">
-                    USDC Amount
-                  </Label>
-                  <Input
-                    id={`edit-amount1-${index}`}
-                    type="number"
-                    step="0.01"
-                    value={amount1}
-                    onChange={(e) => setAmount1(e.target.value)}
-                    placeholder="1.0"
-                    className="h-9"
-                  />
-                </div>
-              </div>
+
+              <DepositTokens
+                positionType={getPositionType(
+                  position.minPrice,
+                  position.maxPrice,
+                  currentPrice ?? 0
+                )}
+                handleAmount0Change={(value) => setAmount0(value)}
+                handleAmount1Change={(value) => setAmount1(value)}
+                amount0={amount0}
+                amount1={amount1}
+                currentPrice={currentPrice ?? 0}
+              />
               <div className="flex gap-2">
                 <Button
                   size="sm"
                   onClick={() => {
-                    // TODO: Call modify function
-                    console.log("Adding liquidity to", index);
+                    const tickLower = priceToTick(position.minPrice);
+                    const tickUpper = priceToTick(position.maxPrice);
+
+                    const amount0Desired = BigInt(
+                      parseFloat(amount0 || "0") * 1e18
+                    );
+                    const amount1Desired = BigInt(
+                      parseFloat(amount1 || "0") * 1e6
+                    );
+                    addLiquidity({
+                      tokenId: BigInt(tokenId as string),
+                      amount0Desired,
+                      amount1Desired,
+                      tickLower,
+                      tickUpper,
+                    });
                   }}
-                  disabled={!amount0 || !amount1}
+                  disabled={!amount0 && !amount1}
                   className="flex-1"
                 >
                   Confirm
@@ -185,8 +195,12 @@ const SubPosition = ({
                   size="sm"
                   variant="destructive"
                   onClick={() => {
-                    // TODO: Call modify function
-                    console.log("Removing liquidity from", index);
+                    removeLiquidity({
+                      tokenId: BigInt(tokenId as string),
+                      liquidityPercentage: parseFloat(removePercentage),
+                      tickLower: priceToTick(position.minPrice),
+                      tickUpper: priceToTick(position.maxPrice),
+                    });
                   }}
                   className="flex-1"
                 >

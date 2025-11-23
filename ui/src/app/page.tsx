@@ -49,9 +49,11 @@ export default function Home() {
     getCurrentPrice,
     priceToTick,
     tickToPrice,
+    checkAllowance,
+    approveAllowance,
     getPoolInfo,
     fetchUserPositions,
-    isMinting,
+
     isConfirming,
     isConfirmed,
     transactionHash,
@@ -65,6 +67,7 @@ export default function Home() {
     maxPrice: 3500,
     amount0: "",
     amount1: "",
+    positionValue: "",
     lastInputToken: null,
   });
 
@@ -83,6 +86,7 @@ export default function Home() {
           maxPrice: price * 1.25,
           amount0: "",
           amount1: "",
+          positionValue: "",
           lastInputToken: null,
         });
       }
@@ -99,13 +103,15 @@ export default function Home() {
           const openPositions = fetchedPositions.filter(
             (position) => position.liquidity > BigInt(0)
           );
+
           setPositions(openPositions);
         })
         .finally(() => {
           setIsLoadingPositions(false);
         });
     }
-  }, [address, fetchUserPositions]);
+  }, []);
+  // }, [address, fetchUserPositions]);
 
   // Refresh positions when a new position is created
   useEffect(() => {
@@ -116,15 +122,32 @@ export default function Home() {
           const openPositions = fetchedPositions.filter(
             (position) => position.liquidity > BigInt(0)
           );
-          console.log("openPositions", openPositions);
+
+          console.log("Open positions:", openPositions);
+
           setPositions(openPositions);
         });
       }, 2000);
     }
-  }, [isConfirmed, address, fetchUserPositions]);
+  }, []);
 
-  const handleCreatePosition = () => {
+  const handleCreatePosition = async () => {
     if (!address || !position) return;
+
+    const amount0 = BigInt(parseFloat(position.amount0 || "0") * 1e18);
+    const amount1 = BigInt(parseFloat(position.amount1 || "0") * 1e6);
+
+    if (amount1 > BigInt(0)) {
+      const hasAllowance = await checkAllowance(
+        address as `0x${string}`,
+        amount1
+      );
+
+      if (!hasAllowance) {
+        await approveAllowance(address as `0x${string}`, amount1);
+        return;
+      }
+    }
 
     // Convert prices to ticks
     const tickLower = priceToTick(position.minPrice);
@@ -133,12 +156,8 @@ export default function Home() {
     mintPosition({
       tickLower,
       tickUpper,
-      amount0Desired: BigInt(
-        Math.floor(parseFloat(position.amount0 || "0") * 1e18)
-      ),
-      amount1Desired: BigInt(
-        Math.floor(parseFloat(position.amount1 || "0") * 1e6)
-      ),
+      amount0Desired: amount0,
+      amount1Desired: amount1,
       recipient: address,
     });
   };
@@ -438,6 +457,7 @@ export default function Home() {
                   <MultiRangePriceSelector
                     currentPrice={currentPrice}
                     subPositions={[position]}
+                    ticks={[]}
                     onRangeChange={(minPrice, maxPrice) => {
                       setPosition((prevPosition) => ({
                         ...prevPosition,
@@ -483,14 +503,10 @@ export default function Home() {
 
                 <Button
                   onClick={handleCreatePosition}
-                  disabled={!address || isMinting || isConfirming}
+                  disabled={!address || isConfirming}
                   className="w-full"
                 >
-                  {isMinting
-                    ? "Creating Position..."
-                    : isConfirming
-                    ? "Confirming..."
-                    : "Create Sub-Position"}
+                  {isConfirming ? "Confirming..." : "Create Position"}
                 </Button>
 
                 {/* Transaction Status */}

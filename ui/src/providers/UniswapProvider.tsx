@@ -2,9 +2,16 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, keccak256, numberToHex, padHex } from "viem";
 import { unichain } from "viem/chains";
-import { Token, ChainId, Ether, Percent, Price } from "@uniswap/sdk-core";
+import {
+  Token,
+  ChainId,
+  Ether,
+  Percent,
+  Price,
+  Currency,
+} from "@uniswap/sdk-core";
 import {
   Pool,
   Position as UniPosition,
@@ -13,17 +20,28 @@ import {
   tickToPrice,
 } from "@uniswap/v4-sdk";
 import { nearestUsableTick } from "@uniswap/v3-sdk";
-import { STATE_VIEW_ABI } from "../config/abis";
+import {
+  CHECK_ALLOWANCE_ABI,
+  APPROVE_ALLOWANCE_ABI,
+  STATE_VIEW_ABI,
+  YOGA_GET_KEY_ABI,
+  YOGA_GET_TICKS_ABI,
+  YOGA_MINT_POSITION_ABI,
+  YOGA_MODIFY_POSITION_ABI,
+  YOGA_OWNER_OF_ABI,
+} from "../config/abis";
+import { encodePacked } from "viem";
+import { safeGetItem, safeSetItem } from "@/lib/utils";
 
 // Uniswap V4 contract addresses
 const STATE_VIEW_ADDRESS = "0x86e8631a016f9068c3f085faf484ee3f5fdee8f2";
-const POSITION_MANAGER_ADDRESS = "0x4529a01c7a0410167c5740c487a8de60232617bf";
+// Yoga custom position manager address - TODO: Update with deployed contract address
+const YOGA_POSITION_MANAGER_ADDRESS =
+  "0xB0c8B766bFC40891F0f829CCAdb638F4Ec2393E3"; // PLACEHOLDER
 
 // Constants
 const ETH_NATIVE = Ether.onChain(ChainId.UNICHAIN);
 const CHAIN_ID = ChainId.UNICHAIN;
-const UNICHAIN_SUBGRAPH_URL =
-  "https://gateway.thegraph.com/api/subgraphs/id/EoCvJ5tyMLMJcTnLQwWpjAtPdn74PcrZgzfcT5bYxNBH";
 
 // Token addresses
 const USDC_TOKEN_ADDRESS = "0x078D782b760474a361dDA0AF3839290b0EF57AD6";
@@ -53,6 +71,15 @@ export interface MintPositionParams {
   deadline?: number;
 }
 
+export interface createSubPosition {
+  tokenId: bigint;
+  tickLower: number;
+  tickUpper: number;
+  amount0Desired: bigint;
+  amount1Desired: bigint;
+  recipient: `0x${string}`;
+}
+
 export interface PoolInfo {
   sqrtPriceX96: bigint;
   tick: number;
@@ -67,6 +94,7 @@ export interface Position {
   maxPrice: number;
   amount0: string;
   amount1: string;
+  positionValue: string;
   lastInputToken: "eth" | "usdc" | null;
 }
 
@@ -91,6 +119,8 @@ export interface AddLiquidityParams {
   tokenId: bigint;
   amount0Desired: bigint;
   amount1Desired: bigint;
+  tickLower: number;
+  tickUpper: number;
   slippageTolerance?: number;
   deadline?: number;
 }
@@ -98,15 +128,53 @@ export interface AddLiquidityParams {
 export interface RemoveLiquidityParams {
   tokenId: bigint;
   liquidityPercentage: number;
+  tickLower: number;
+  tickUpper: number;
   slippageTolerance?: number;
   deadline?: number;
   burnToken?: boolean;
 }
 
-interface SubgraphPosition {
-  id: string;
-  tokenId: string;
-  owner: string;
+//SimpleModifyLiquidityParams takes
+// int24 tickLower;
+// int24 tickUpper;
+// int256 liquidityDelta;
+
+//Mint takes
+// PoolKey calldata key,
+// SimpleModifyLiquidityParams calldata params,
+// uint128 currency0Max,
+// uint128 currency1Max
+
+//Modify takes
+// address payable recipient,
+// uint256 tokenId,
+// SimpleModifyLiquidityParams calldata params,
+// uint128 currency0Max,
+// uint128 currency1Max
+export interface NewModifyLiquidityParams {
+  tokenId: bigint;
+  address: `0x${string}`;
+  liquidityDelta: bigint;
+  tickLower: number;
+  tickUpper: number;
+  amount0: bigint;
+  amount1: bigint;
+}
+
+export interface NewMintPositionParams {
+  liquidityDelta: bigint;
+  tickLower: number;
+  tickUpper: number;
+  amount0: bigint;
+  amount1: bigint;
+  poolKey: {
+    currency0: `0x${string}`;
+    currency1: `0x${string}`;
+    fee: number;
+    tickSpacing: number;
+    hooks: `0x${string}`;
+  };
 }
 
 interface UniswapContextType {
@@ -114,14 +182,21 @@ interface UniswapContextType {
   getCurrentPrice: () => Promise<number | null>;
   priceToTick: (price: number) => number;
   tickToPrice: (tick: number) => number;
+  getTickRangeAmounts: (
+    tokenId: bigint,
+    tickLower: number,
+    tickUpper: number
+  ) => Promise<{ amount0: number; amount1: number }>;
   mintPosition: (params: MintPositionParams) => Promise<void>;
   addLiquidity: (params: AddLiquidityParams) => Promise<void>;
+  checkAllowance: (spender: `0x${string}`, amount: bigint) => Promise<boolean>;
+  approveAllowance: (spender: `0x${string}`, amount: bigint) => Promise<void>;
+  getTicks: (tokenId: bigint) => Promise<number[]>;
   removeLiquidity: (params: RemoveLiquidityParams) => Promise<void>;
-  collectFees: (tokenId: bigint, recipient: string) => Promise<void>;
+  createSubPosition: (params: createSubPosition) => Promise<void>;
   fetchUserPositions: (
     userAddress: `0x${string}`
   ) => Promise<PositionDetails[]>;
-  isMinting: boolean;
   isConfirming: boolean;
   isConfirmed: boolean;
   transactionHash?: `0x${string}`;
@@ -131,7 +206,6 @@ interface UniswapContextType {
 const UniswapContext = createContext<UniswapContextType | undefined>(undefined);
 
 export function UniswapProvider({ children }: { children: ReactNode }) {
-  const [isMinting, setIsMinting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const { data: hash, error: writeError, writeContract } = useWriteContract();
@@ -186,14 +260,6 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
         lpFee,
         liquidity: liquidityData as bigint,
       };
-
-      console.log("Pool Info:", {
-        sqrtPriceX96: sqrtPriceX96.toString(),
-        tick,
-        protocolFee,
-        lpFee,
-        liquidity: liquidityData.toString(),
-      });
 
       return poolInfo;
     } catch (err) {
@@ -262,12 +328,34 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
     return parseFloat(priceObj.toSignificant(6));
   };
 
+  const checkAllowance = async (spender: `0x${string}`, amount: bigint) => {
+    const usdcAllowance = await publicClient.readContract({
+      address: USDC_TOKEN_ADDRESS as `0x${string}`,
+      abi: CHECK_ALLOWANCE_ABI,
+      functionName: "allowance",
+      args: [spender, YOGA_POSITION_MANAGER_ADDRESS],
+    });
+
+    if (BigInt(usdcAllowance) >= BigInt(amount)) {
+      return true;
+    } else {
+      return false;
+    }
+  };
+
+  const approveAllowance = async (spender: `0x${string}`, amount: bigint) => {
+    writeContract({
+      address: USDC_TOKEN_ADDRESS as `0x${string}`,
+      abi: APPROVE_ALLOWANCE_ABI,
+      functionName: "approve",
+      args: [spender, amount],
+    });
+  };
   /**
-   * Mints a new liquidity position using the Uniswap v4 SDK
+   * Mints a new liquidity position using the Yoga contract
    */
   const mintPosition = async (params: MintPositionParams) => {
     try {
-      setIsMinting(true);
       setError(null);
 
       // 1. Fetch current pool state
@@ -288,236 +376,307 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
         poolInfo.tick
       );
 
-      // 3. Create Position from desired amounts
+      // 3. Align ticks to tick spacing
+      const tickLower = nearestUsableTick(params.tickLower, TICK_SPACING);
+      const tickUpper = nearestUsableTick(params.tickUpper, TICK_SPACING);
+
+      // 4. Create Position from desired amounts to calculate liquidity
       const position = UniPosition.fromAmounts({
         pool,
-        tickLower: nearestUsableTick(params.tickLower, TICK_SPACING),
-        tickUpper: nearestUsableTick(params.tickUpper, TICK_SPACING),
+        tickLower,
+        tickUpper,
         amount0: params.amount0Desired.toString(),
         amount1: params.amount1Desired.toString(),
         useFullPrecision: true,
       });
 
-      console.log("Position created:", {
-        liquidity: position.liquidity.toString(),
-        amount0: position.amount0.toExact(),
-        amount1: position.amount1.toExact(),
-      });
+      const liquidity = BigInt(position.liquidity.toString());
 
-      // 4. Prepare MintOptions
+      // 5. Prepare slippage limits
       const slippageTolerance = params.slippageTolerance || 0.5; // 0.5% default
-      const slippagePct = new Percent(
-        Math.floor(slippageTolerance * 100),
-        10_000
+      const slippageFactor = 1 + slippageTolerance / 100;
+
+      const currency0Max = BigInt(
+        Math.floor(Number(params.amount0Desired) * slippageFactor)
+      );
+      const currency1Max = BigInt(
+        Math.floor(Number(params.amount1Desired) * slippageFactor)
       );
 
-      const deadlineSeconds = params.deadline || 20 * 60; // 20 minutes default
-      const currentBlock = await publicClient.getBlock();
-      const currentBlockTimestamp = Number(currentBlock.timestamp);
-      const deadline = currentBlockTimestamp + deadlineSeconds;
-
-      const mintOptions = {
-        recipient: params.recipient,
-        slippageTolerance: slippagePct,
-        deadline: deadline.toString(),
-        useNative: USDC_TOKEN.isNative
-          ? Ether.onChain(USDC_TOKEN.chainId)
-          : ETH_NATIVE,
-        hookData: "0x",
+      // 6. Prepare PoolKey structure
+      const poolKey = {
+        currency0:
+          "0x0000000000000000000000000000000000000000" as `0x${string}`,
+        currency1: USDC_TOKEN.address as `0x${string}`,
+        fee: FEE,
+        tickSpacing: TICK_SPACING,
+        hooks: HOOKS as `0x${string}`,
       };
 
-      //Now I need tick lower, tick upper, and liquidity to add
+      // 7. Prepare SimpleModifyLiquidityParams
+      const modifyParams = {
+        tickLower,
+        tickUpper,
+        liquidityDelta: liquidity,
+      };
 
-      console.log("mintOptions:", mintOptions);
+      //Check allowance
+      await checkAllowance(YOGA_POSITION_MANAGER_ADDRESS, currency1Max);
 
-      // 5. Generate transaction calldata using SDK
-      const { calldata, value } = V4PositionManager.addCallParameters(
-        position,
-        mintOptions
-      );
-
-      console.log("Transaction data:", {
-        calldata,
-        value,
-        to: POSITION_MANAGER_ADDRESS,
-      });
-
-      // 6. Execute transaction
+      // 8. Execute transaction
       writeContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-        abi: [
-          {
-            inputs: [
-              { internalType: "bytes[]", name: "data", type: "bytes[]" },
-            ],
-            name: "multicall",
-            outputs: [
-              { internalType: "bytes[]", name: "results", type: "bytes[]" },
-            ],
-            stateMutability: "payable",
-            type: "function",
-          },
-        ],
-        functionName: "multicall",
-        args: [[calldata as `0x${string}`]],
-        value: BigInt(value),
+        address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: YOGA_MINT_POSITION_ABI,
+        functionName: "mint",
+        args: [poolKey, modifyParams, currency0Max, currency1Max],
+        value: params.amount0Desired, // ETH value for native currency
       });
     } catch (err) {
       console.error("Error minting position:", err);
       setError(err as Error);
       throw err;
-    } finally {
-      setIsMinting(false);
     }
   };
 
-  /**
-   * Helper function to decode packed position info
-   */
-  const decodePositionInfo = (value: bigint) => {
-    return {
-      getTickUpper: () => {
-        const raw = Number((value >> BigInt(32)) & BigInt(0xffffff));
-        return raw >= 0x800000 ? raw - 0x1000000 : raw;
-      },
-      getTickLower: () => {
-        const raw = Number((value >> BigInt(8)) & BigInt(0xffffff));
-        return raw >= 0x800000 ? raw - 0x1000000 : raw;
-      },
-      hasSubscriber: () => (value & BigInt(0xff)) !== BigInt(0),
-    };
+  // /**
+  //  * Fetches position IDs from the subgraph for a given owner
+  //  */
+  // const getPositionIds = async (owner: `0x${string}`): Promise<bigint[]> => {
+  //   const GET_POSITIONS_QUERY = `
+  //     query GetPositions($owner: String!) {
+  //       positions(where: { owner: $owner }) {
+  //         tokenId
+  //         owner
+  //         id
+  //       }
+  //     }
+  //   `;
+
+  //   try {
+  //     const headers = {
+  //       Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUBGRAPH_API_KEY}`,
+  //     };
+
+  //     const response = await fetch(UNICHAIN_SUBGRAPH_URL, {
+  //       method: "POST",
+  //       headers,
+  //       body: JSON.stringify({
+  //         query: GET_POSITIONS_QUERY,
+  //         variables: { owner: owner.toLowerCase() },
+  //       }),
+  //     });
+
+  //     const data = await response.json();
+
+  //     if (data.errors) {
+  //       throw new Error(data.errors[0].message);
+  //     }
+
+  //     const positions = data.data.positions as SubgraphPosition[];
+  //     return positions.map((p) => BigInt(p.tokenId));
+  //   } catch (err) {
+  //     console.error("Error fetching position IDs:", err);
+  //     throw err;
+  //   }
+  // };
+
+  const getTicks = async (tokenId: bigint): Promise<number[]> => {
+    const ticks = (await publicClient.readContract({
+      address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
+      abi: YOGA_GET_TICKS_ABI,
+      functionName: "getTicks",
+      args: [tokenId],
+    })) as number[];
+
+    const sortedTicks = ticks.sort((a, b) => a - b);
+
+    return sortedTicks;
   };
 
-  /**
-   * Fetches position IDs from the subgraph for a given owner
-   */
-  const getPositionIds = async (owner: `0x${string}`): Promise<bigint[]> => {
-    const GET_POSITIONS_QUERY = `
-      query GetPositions($owner: String!) {
-        positions(where: { owner: $owner }) {
-          tokenId
-          owner
-          id
-        }
-      }
-    `;
-
-    try {
-      const headers = {
-        Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUBGRAPH_API_KEY}`,
-      };
-
-      const response = await fetch(UNICHAIN_SUBGRAPH_URL, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          query: GET_POSITIONS_QUERY,
-          variables: { owner: owner.toLowerCase() },
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.errors) {
-        throw new Error(data.errors[0].message);
-      }
-
-      const positions = data.data.positions as SubgraphPosition[];
-      return positions.map((p) => BigInt(p.tokenId));
-    } catch (err) {
-      console.error("Error fetching position IDs:", err);
-      throw err;
-    }
-  };
-
-  /**
-   * Fetches details for a specific position
-   */
-  const getPositionDetails = async (
-    tokenId: bigint
-  ): Promise<PositionDetails> => {
-    const POSITION_MANAGER_ABI = [
-      {
-        name: "getPoolAndPositionInfo",
-        type: "function",
-        inputs: [{ name: "tokenId", type: "uint256" }],
-        outputs: [
-          {
-            name: "poolKey",
-            type: "tuple",
-            components: [
-              { name: "currency0", type: "address" },
-              { name: "currency1", type: "address" },
-              { name: "fee", type: "uint24" },
-              { name: "tickSpacing", type: "int24" },
-              { name: "hooks", type: "address" },
-            ],
-          },
-          { name: "info", type: "uint256" },
-        ],
-      },
-      {
-        name: "getPositionLiquidity",
-        type: "function",
-        inputs: [{ name: "tokenId", type: "uint256" }],
-        outputs: [{ name: "liquidity", type: "uint128" }],
-      },
-    ] as const;
-
-    try {
-      // Get pool key and packed position info
-      const [poolKey, infoValue] = (await publicClient.readContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-        abi: POSITION_MANAGER_ABI,
-        functionName: "getPoolAndPositionInfo",
+  const getPoolKey = async (tokenId: bigint) => {
+    const [currency0, currency1, fee, tickSpacing, hooks] =
+      (await publicClient.readContract({
+        address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: YOGA_GET_KEY_ABI,
+        functionName: "getKey",
         args: [tokenId],
       })) as readonly [
-        {
-          currency0: `0x${string}`;
-          currency1: `0x${string}`;
-          fee: number;
-          tickSpacing: number;
-          hooks: `0x${string}`;
-        },
-        bigint
+        `0x${string}`,
+        `0x${string}`,
+        number,
+        number,
+        `0x${string}`
       ];
 
-      // Get current liquidity
-      const liquidity = (await publicClient.readContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-        abi: POSITION_MANAGER_ABI,
-        functionName: "getPositionLiquidity",
-        args: [tokenId],
-      })) as bigint;
+    const poolKey = {
+      currency0,
+      currency1,
+      fee,
+      tickSpacing,
+      hooks,
+    };
+    return poolKey;
+  };
 
-      // Decode packed position info
-      const positionInfo = decodePositionInfo(infoValue);
+  const getPoolId = async (tokenId: bigint) => {
+    const { currency0, currency1, fee, tickSpacing, hooks } = await getPoolKey(
+      tokenId
+    );
+    return Pool.getPoolId(ETH_NATIVE, USDC_TOKEN, fee, tickSpacing, hooks);
+  };
 
-      // Fetch pool info to compute actual token balances
-      const poolInfo = await getPoolInfo();
-      if (!poolInfo) {
-        throw new Error("Failed to fetch pool info");
+  const getPool = async (tokenId: bigint) => {
+    const poolKey = await getPoolKey(tokenId);
+    const poolInfo = await getPoolInfo();
+    if (!poolInfo) {
+      throw new Error("Failed to fetch pool info");
+    }
+    return new Pool(
+      ETH_NATIVE,
+      USDC_TOKEN,
+      poolKey.fee,
+      poolKey.tickSpacing,
+      poolKey.hooks,
+      poolInfo.sqrtPriceX96.toString(),
+      poolInfo.liquidity.toString(),
+      poolInfo.tick
+    );
+  };
+
+  const getPositionId = async (
+    tokenId: bigint,
+    tickLower: number,
+    tickUpper: number
+  ) => {
+    const poolInfo = await getPoolInfo();
+    if (!poolInfo) {
+      throw new Error("Failed to fetch pool info");
+    }
+
+    //the hash of the packed encoding owner, tick lower, tick upper, salt
+
+    const owner = YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`;
+    const salt = padHex(numberToHex(tokenId), { size: 32 });
+
+    console.log("Salt:", salt);
+
+    const postionId = keccak256(
+      encodePacked(
+        ["address", "int24", "int24", "bytes32"],
+        [owner, tickLower, tickUpper, salt]
+      )
+    );
+
+    return postionId;
+  };
+
+  // const getSubPositionDetails = async (
+  //   tokenId: bigint,
+  //   tickLower: number,
+  //   tickUpper: number
+  // ): Promise<PositionDetails> => {
+  //   const poolId = await getPoolId(tokenId);
+  //   const postionId = await getPositionId(tokenId, tickLower, tickUpper);
+  //   const pool = await getPool(tokenId);
+  // };
+  //   const liquidity = (await publicClient.readContract({
+  //     address: STATE_VIEW_ADDRESS as `0x${string}`,
+  //     abi: STATE_VIEW_ABI,
+  //     functionName: "getPositionLiquidity",
+  //     args: [poolId as `0x${string}`, postionId as `0x${string}`],
+  //   })) as bigint;
+
+  //   const uniPos = new UniPosition({
+  //     pool,
+  //     tickLower,
+  //     tickUpper,
+  //     liquidity: liquidity.toString(),
+  //   });
+
+  //   return {
+  //     tokenId,
+  //     tickLower,
+  //     tickUpper,
+  //     liquidity,
+  //     poolKey,
+  //     amount0: 0,
+  //     amount1: 0,
+  //   };
+  // };
+
+  /**
+   * Fetches details for a specific position from Yoga contract
+   */
+  const getPositionDetails = async (
+    tokenId: bigint,
+    lowerTick?: number,
+    upperTick?: number
+  ): Promise<PositionDetails> => {
+    try {
+      const ticks = await getTicks(tokenId);
+      const poolId = await getPoolId(tokenId);
+      const poolKey = await getPoolKey(tokenId);
+      const pool = await getPool(tokenId);
+
+      const ranges = [];
+
+      if (lowerTick && upperTick) {
+        ranges.push({
+          lower: lowerTick,
+          upper: upperTick,
+          liquidity: BigInt(0),
+        });
+      } else {
+        for (let i = 0; i < ticks.length - 1; i++) {
+          ranges.push({
+            lower: ticks[i],
+            upper: ticks[i + 1],
+            liquidity: BigInt(0),
+          });
+        }
       }
-      const pool = new Pool(
-        ETH_NATIVE,
-        USDC_TOKEN,
-        FEE,
-        TICK_SPACING,
-        HOOKS,
-        poolInfo.sqrtPriceX96.toString(),
-        poolInfo.liquidity.toString(),
-        poolInfo.tick
-      );
 
-      const position = new UniPosition({
-        pool,
-        tickLower: positionInfo.getTickLower(),
-        tickUpper: positionInfo.getTickUpper(),
-        liquidity: liquidity.toString(),
-      });
+      let totalLiquidity = BigInt(0);
 
-      const amount0 = parseFloat(position.amount0.toExact());
-      const amount1 = parseFloat(position.amount1.toExact());
+      for (const r of ranges) {
+        const postionId = await getPositionId(tokenId, r.lower, r.upper);
+        const liquidity = (await publicClient.readContract({
+          address: STATE_VIEW_ADDRESS as `0x${string}`,
+          abi: STATE_VIEW_ABI,
+          functionName: "getPositionLiquidity",
+          args: [poolId as `0x${string}`, postionId as `0x${string}`],
+        })) as bigint;
+
+        console.log(
+          "Liquidity for tokenId:",
+          tokenId,
+          "and range:",
+          r.lower,
+          r.upper,
+          "is:",
+          liquidity
+        );
+
+        totalLiquidity += liquidity;
+
+        r.liquidity = liquidity; // store per-range
+        totalLiquidity += liquidity; // aggregate
+      }
+
+      let totalAmount0 = 0;
+      let totalAmount1 = 0;
+
+      for (const r of ranges) {
+        const uniPos = new UniPosition({
+          pool,
+          tickLower: r.lower,
+          tickUpper: r.upper,
+          liquidity: r.liquidity.toString(),
+        });
+
+        totalAmount0 += parseFloat(uniPos.amount0.toExact());
+        totalAmount1 += parseFloat(uniPos.amount1.toExact());
+      }
 
       const priceUsd = await getCurrentPrice(); // USDC per ETH
 
@@ -525,16 +684,16 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
         throw new Error("Failed to fetch current price");
       }
 
-      const totalValueUsd = amount0 * priceUsd + amount1;
+      const totalValueUsd = totalAmount0 * priceUsd + totalAmount1;
 
       return {
         tokenId,
-        tickLower: positionInfo.getTickLower(),
-        tickUpper: positionInfo.getTickUpper(),
-        liquidity,
+        tickLower: ticks[0],
+        tickUpper: ticks[ticks.length - 1],
+        liquidity: totalLiquidity,
         poolKey,
-        amount0,
-        amount1,
+        amount0: totalAmount0,
+        amount1: totalAmount1,
         totalValueUsd,
       };
     } catch (err) {
@@ -543,33 +702,107 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const getTickRangeAmounts = async (
+    tokenId: bigint,
+    tickLower: number,
+    tickUpper: number
+  ) => {
+    const poolId = await getPoolId(tokenId);
+    const postionId = await getPositionId(tokenId, tickLower, tickUpper);
+    const pool = await getPool(tokenId);
+
+    const liquidity = (await publicClient.readContract({
+      address: STATE_VIEW_ADDRESS as `0x${string}`,
+      abi: STATE_VIEW_ABI,
+      functionName: "getPositionLiquidity",
+      args: [poolId as `0x${string}`, postionId as `0x${string}`],
+    })) as bigint;
+
+    const position = new UniPosition({
+      pool,
+      tickLower,
+      tickUpper,
+      liquidity: liquidity.toString(),
+    });
+
+    const amount0 = parseFloat(position.amount0.toExact());
+    const amount1 = parseFloat(position.amount1.toExact());
+
+    return {
+      amount0,
+      amount1,
+    };
+  };
+
+  async function yogaTokenExists(tokenId: bigint): Promise<boolean> {
+    try {
+      await publicClient.readContract({
+        address: YOGA_POSITION_MANAGER_ADDRESS,
+        abi: YOGA_OWNER_OF_ABI, // includes ownerOf
+        functionName: "ownerOf",
+        args: [tokenId],
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /**
-   * Fetches all positions for a user address
+   * Fetches all positions for a user address.
+   * Uses cached "yoga_latest_token_id" to avoid rescanning old NFTs.
+   * Always returns the last 2 positions + any newly discovered ones.
    */
   const fetchUserPositions = async (
     userAddress: `0x${string}`
   ): Promise<PositionDetails[]> => {
     try {
-      // Get position IDs from subgraph
-      const tokenIds = await getPositionIds(userAddress);
-      console.log(`Found ${tokenIds.length} positions for ${userAddress}`);
+      // Load last known tokenId from cache
+      let latestTokenId = safeGetItem<number>("yoga_latest_token_id") ?? 1;
 
-      // Fetch details for each position
-      const positions = await Promise.all(
-        tokenIds.map((tokenId) => getPositionDetails(tokenId))
+      const positions: PositionDetails[] = [];
+
+      const numToFetch = 2;
+      const fromToken = Math.max(1, latestTokenId - (numToFetch - 1));
+
+      const recentFetches = await Promise.all(
+        [...Array(numToFetch)].map(async (_, i) => {
+          const id = latestTokenId - i;
+          if (id < 1) return null;
+
+          try {
+            return await getPositionDetails(BigInt(id));
+          } catch {
+            return null;
+          }
+        })
       );
 
-      // Log position details
-      positions.forEach((position) => {
-        console.log(`Position ${position.tokenId}:`);
-        console.log(`  Token0: ${position.poolKey.currency0}`);
-        console.log(`  Token1: ${position.poolKey.currency1}`);
-        console.log(`  Fee: ${position.poolKey.fee / 10000}%`);
-        console.log(`  Range: ${position.tickLower} to ${position.tickUpper}`);
-        console.log(`  Liquidity: ${position.liquidity.toString()}`);
-        console.log(`  Hooks: ${position.poolKey.hooks}`);
-        console.log("---");
-      });
+      for (const p of recentFetches) {
+        if (p) positions.push(p);
+      }
+
+      let scanId = latestTokenId + 1;
+
+      while (true) {
+        try {
+          const exists = await yogaTokenExists(BigInt(scanId));
+          if (!exists) break;
+
+          const pos = await getPositionDetails(BigInt(scanId));
+          if (!pos) break;
+
+          positions.push(pos);
+
+          safeSetItem("yoga_latest_token_id", scanId);
+
+          scanId++;
+        } catch {
+          break;
+        }
+      }
+
+      console.log("returned Positions:", positions);
 
       return positions;
     } catch (err) {
@@ -580,15 +813,20 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
   };
 
   /**
-   * Adds liquidity to an existing position
+   * Creates a new sub-position using Yoga contract's modify function
    */
-  const addLiquidity = async (params: AddLiquidityParams) => {
+  const createSubPosition = async (params: createSubPosition) => {
     try {
-      setIsMinting(true);
       setError(null);
 
-      // 1. Get position details
-      const positionDetails = await getPositionDetails(params.tokenId);
+      const {
+        tokenId,
+        tickLower,
+        tickUpper,
+        amount0Desired,
+        amount1Desired,
+        recipient,
+      } = params;
 
       // 2. Get pool info
       const poolInfo = await getPoolInfo();
@@ -608,263 +846,243 @@ export function UniswapProvider({ children }: { children: ReactNode }) {
         poolInfo.tick
       );
 
-      // 4. Create Position from desired amounts
       const position = UniPosition.fromAmounts({
         pool,
-        tickLower: positionDetails.tickLower,
-        tickUpper: positionDetails.tickUpper,
-        amount0: params.amount0Desired.toString(),
-        amount1: params.amount1Desired.toString(),
-        useFullPrecision: true,
+        tickLower,
+        tickUpper,
+        amount0: amount0Desired.toString(),
+        amount1: amount1Desired.toString(),
+        useFullPrecision: false,
       });
 
-      // 5. Prepare options
-      const slippageTolerance = params.slippageTolerance || 0.5;
-      const slippagePct = new Percent(
-        Math.floor(slippageTolerance * 100),
-        10_000
+      const liquidityDelta = BigInt(position.liquidity.toString());
+
+      // 5. Prepare slippage limits
+      const slippageTolerance = 0.5;
+      const slippageFactor = 1 + slippageTolerance / 100;
+
+      const currency0Max = BigInt(
+        Math.floor(Number(params.amount0Desired) * slippageFactor)
+      );
+      const currency1Max = BigInt(
+        Math.floor(Number(params.amount1Desired) * slippageFactor)
       );
 
-      const deadlineSeconds = params.deadline || 20 * 60;
-      const currentBlock = await publicClient.getBlock();
-      const currentBlockTimestamp = Number(currentBlock.timestamp);
-      const deadline = currentBlockTimestamp + deadlineSeconds;
+      if (currency1Max > 0) {
+        await checkAllowance(YOGA_POSITION_MANAGER_ADDRESS, currency1Max);
+      }
 
-      const addOptions = {
-        slippageTolerance: slippagePct,
-        deadline: deadline.toString(),
-        tokenId: params.tokenId.toString(),
-        useNative: ETH_NATIVE,
-        hookData: "0x",
+      // 6. Prepare SimpleModifyLiquidityParams (positive liquidityDelta for adding)
+      const modifyParams = {
+        tickLower: tickLower,
+        tickUpper: tickUpper,
+        liquidityDelta: liquidityDelta, // Positive for adding
       };
 
-      // 6. Generate transaction calldata
-      const { calldata, value } = V4PositionManager.addCallParameters(
-        position,
-        addOptions
+      writeContract({
+        address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: YOGA_MODIFY_POSITION_ABI,
+        functionName: "modify",
+        args: [
+          recipient as `0x${string}`,
+          params.tokenId,
+          modifyParams,
+          currency0Max,
+          currency1Max,
+        ],
+        value: params.amount0Desired, // ETH value for native currency
+      });
+    } catch (err) {
+      console.error("Error adding liquidity:", err);
+      setError(err as Error);
+      throw err;
+    }
+  };
+
+  /**
+   * Adds liquidity to an existing position using Yoga contract's modify function
+   */
+  const addLiquidity = async (params: AddLiquidityParams) => {
+    try {
+      setError(null);
+
+      // 1. Get position details
+      const positionDetails = await getPositionDetails(
+        params.tokenId,
+        params.tickLower,
+        params.tickUpper
       );
 
-      console.log("Add liquidity transaction:", { calldata, value });
+      // 2. Get pool info
+      const poolInfo = await getPoolInfo();
+      if (!poolInfo) {
+        throw new Error("Failed to fetch pool info");
+      }
 
-      // 7. Execute transaction
-      writeContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+      // 3. Create Pool instance
+      const pool = new Pool(
+        ETH_NATIVE,
+        USDC_TOKEN,
+        FEE,
+        TICK_SPACING,
+        HOOKS,
+        poolInfo.sqrtPriceX96.toString(),
+        poolInfo.liquidity.toString(),
+        poolInfo.tick
+      );
+
+      // 4. Create Position from desired amounts to calculate liquidity to add
+      const position = UniPosition.fromAmounts({
+        pool,
+        tickLower: params.tickLower || positionDetails.tickLower,
+        tickUpper: params.tickUpper || positionDetails.tickUpper,
+        amount0: params.amount0Desired.toString(),
+        amount1: params.amount1Desired.toString(),
+        useFullPrecision: false,
+      });
+
+      const liquidityDelta = BigInt(position.liquidity.toString());
+
+      // 5. Prepare slippage limits
+      const slippageTolerance = params.slippageTolerance || 0.5;
+      const slippageFactor = 1 + slippageTolerance / 100;
+
+      const currency0Max = BigInt(
+        Math.floor(Number(params.amount0Desired) * slippageFactor)
+      );
+      const currency1Max = BigInt(
+        Math.floor(Number(params.amount1Desired) * slippageFactor)
+      );
+
+      // 6. Prepare SimpleModifyLiquidityParams (positive liquidityDelta for adding)
+      const modifyParams = {
+        tickLower: params.tickLower || positionDetails.tickLower,
+        tickUpper: params.tickUpper || positionDetails.tickUpper,
+        liquidityDelta: liquidityDelta, // Positive for adding
+      };
+
+      // 7. Execute transaction - recipient can be the current owner
+      const recipient = await publicClient.readContract({
+        address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
         abi: [
           {
-            inputs: [
-              { internalType: "bytes[]", name: "data", type: "bytes[]" },
-            ],
-            name: "multicall",
-            outputs: [
-              { internalType: "bytes[]", name: "results", type: "bytes[]" },
-            ],
-            stateMutability: "payable",
+            name: "ownerOf",
             type: "function",
+            inputs: [{ name: "tokenId", type: "uint256" }],
+            outputs: [{ name: "", type: "address" }],
           },
         ],
-        functionName: "multicall",
-        args: [[calldata as `0x${string}`]],
-        value: BigInt(value),
+        functionName: "ownerOf",
+        args: [params.tokenId],
+      });
+
+      writeContract({
+        address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: YOGA_MODIFY_POSITION_ABI,
+        functionName: "modify",
+        args: [
+          recipient as `0x${string}`,
+          params.tokenId,
+          modifyParams,
+          currency0Max,
+          currency1Max,
+        ],
+        value: params.amount0Desired, // ETH value for native currency
       });
     } catch (err) {
       console.error("Error adding liquidity:", err);
       setError(err as Error);
       throw err;
     } finally {
-      setIsMinting(false);
     }
   };
 
   /**
-   * Removes liquidity from a position
+   * Removes liquidity from a position using Yoga contract's modify function
    */
   const removeLiquidity = async (params: RemoveLiquidityParams) => {
     try {
-      setIsMinting(true);
-      setError(null);
-
       // 1. Get position details
-      const positionDetails = await getPositionDetails(params.tokenId);
-
-      // 2. Get pool info
-      const poolInfo = await getPoolInfo();
-      if (!poolInfo) {
-        throw new Error("Failed to fetch pool info");
-      }
-
-      // 3. Create Pool instance
-      const pool = new Pool(
-        ETH_NATIVE,
-        USDC_TOKEN,
-        FEE,
-        TICK_SPACING,
-        HOOKS,
-        poolInfo.sqrtPriceX96.toString(),
-        poolInfo.liquidity.toString(),
-        poolInfo.tick
+      const positionDetails = await getPositionDetails(
+        params.tokenId,
+        params.tickLower,
+        params.tickUpper
       );
 
-      // 4. Create Position instance with current liquidity
-      const position = new UniPosition({
-        pool,
-        tickLower: positionDetails.tickLower,
-        tickUpper: positionDetails.tickUpper,
-        liquidity: positionDetails.liquidity.toString(),
-      });
+      console.log("Position Details:", positionDetails);
 
-      // 5. Prepare options
+      // 2. Calculate liquidity to remove based on percentage
+      const currentLiquidity = positionDetails.liquidity;
+      const liquidityToRemove = BigInt(
+        Math.floor(
+          (Number(currentLiquidity) * params.liquidityPercentage) / 100
+        )
+      );
+
+      console.log("Current Liquidity:", currentLiquidity);
+      console.log("Liquidity To Remove:", liquidityToRemove);
+
+      // 3. Prepare slippage limits (for removing, we set minimums)
       const slippageTolerance = params.slippageTolerance || 0.5;
-      const slippagePct = new Percent(
-        Math.floor(slippageTolerance * 100),
-        10_000
-      );
 
-      const deadlineSeconds = params.deadline || 20 * 60;
-      const currentBlock = await publicClient.getBlock();
-      const currentBlockTimestamp = Number(currentBlock.timestamp);
-      const deadline = currentBlockTimestamp + deadlineSeconds;
+      // For removing liquidity, we expect to receive tokens back
+      // So currency0Max and currency1Max act as minimum amounts we're willing to accept
+      // Set them to 0 to accept any amount (or calculate from current position value)
+      const currency0Max = BigInt(0);
+      const currency1Max = BigInt(0);
 
-      const liquidityPercentage = new Percent(
-        Math.floor(params.liquidityPercentage * 100),
-        100
-      );
-
-      const removeOptions = {
-        slippageTolerance: slippagePct,
-        deadline: deadline.toString(),
-        tokenId: params.tokenId.toString(),
-        liquidityPercentage,
-        burnToken: params.burnToken || false,
-        hookData: "0x",
+      // 4. Prepare SimpleModifyLiquidityParams (negative liquidityDelta for removing)
+      const modifyParams = {
+        tickLower: params.tickLower,
+        tickUpper: params.tickUpper,
+        liquidityDelta: liquidityToRemove, // Negative for removing
       };
 
-      // 6. Generate transaction calldata
-      const { calldata, value } = V4PositionManager.removeCallParameters(
-        position,
-        removeOptions
-      );
+      console.log("Modify Params:", modifyParams);
 
-      console.log("Remove liquidity transaction:", { calldata, value });
+      // 5. Get recipient address (current owner)
+      const recipient = await publicClient.readContract({
+        address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: YOGA_OWNER_OF_ABI,
+        functionName: "ownerOf",
+        args: [params.tokenId],
+      });
 
-      // 7. Execute transaction
+      // 6. Execute transaction
       writeContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-        abi: [
-          {
-            inputs: [
-              { internalType: "bytes[]", name: "data", type: "bytes[]" },
-            ],
-            name: "multicall",
-            outputs: [
-              { internalType: "bytes[]", name: "results", type: "bytes[]" },
-            ],
-            stateMutability: "payable",
-            type: "function",
-          },
+        address: YOGA_POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: YOGA_MODIFY_POSITION_ABI,
+        functionName: "modify",
+        args: [
+          recipient as `0x${string}`,
+          params.tokenId,
+          modifyParams,
+          currency0Max,
+          currency1Max,
         ],
-        functionName: "multicall",
-        args: [[calldata as `0x${string}`]],
-        value: BigInt(value),
+        value: BigInt(0), // No ETH needed for removing liquidity
       });
     } catch (err) {
       console.error("Error removing liquidity:", err);
       setError(err as Error);
       throw err;
-    } finally {
-      setIsMinting(false);
-    }
-  };
-
-  /**
-   * Collects fees from a position
-   */
-  const collectFees = async (tokenId: bigint, recipient: string) => {
-    try {
-      setIsMinting(true);
-      setError(null);
-
-      // Get position details to create proper Position instance
-      const positionDetails = await getPositionDetails(tokenId);
-      const poolInfo = await getPoolInfo();
-      if (!poolInfo) {
-        throw new Error("Failed to fetch pool info");
-      }
-
-      const pool = new Pool(
-        ETH_NATIVE,
-        USDC_TOKEN,
-        FEE,
-        TICK_SPACING,
-        HOOKS,
-        poolInfo.sqrtPriceX96.toString(),
-        poolInfo.liquidity.toString(),
-        poolInfo.tick
-      );
-
-      const position = new UniPosition({
-        pool,
-        tickLower: positionDetails.tickLower,
-        tickUpper: positionDetails.tickUpper,
-        liquidity: positionDetails.liquidity.toString(),
-      });
-
-      const currentBlock = await publicClient.getBlock();
-      const deadline = Number(currentBlock.timestamp) + 20 * 60;
-
-      const collectOptions = {
-        tokenId: tokenId.toString(),
-        slippageTolerance: new Percent(0, 10_000), // 0% for fee collection
-        deadline: deadline.toString(),
-        hookData: "0x",
-        recipient: recipient,
-      };
-
-      const { calldata, value } = V4PositionManager.collectCallParameters(
-        position,
-        collectOptions
-      );
-
-      console.log("Collect fees transaction:", { calldata, value });
-
-      writeContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-        abi: [
-          {
-            inputs: [
-              { internalType: "bytes[]", name: "data", type: "bytes[]" },
-            ],
-            name: "multicall",
-            outputs: [
-              { internalType: "bytes[]", name: "results", type: "bytes[]" },
-            ],
-            stateMutability: "payable",
-            type: "function",
-          },
-        ],
-        functionName: "multicall",
-        args: [[calldata as `0x${string}`]],
-        value: BigInt(value),
-      });
-    } catch (err) {
-      console.error("Error collecting fees:", err);
-      setError(err as Error);
-      throw err;
-    } finally {
-      setIsMinting(false);
     }
   };
 
   const value: UniswapContextType = {
     getPoolInfo,
+    getTickRangeAmounts,
     getCurrentPrice,
     priceToTick: priceToTickFn,
     tickToPrice: tickToPriceFn,
+    checkAllowance,
+    approveAllowance,
+    getTicks,
     mintPosition,
     addLiquidity,
     removeLiquidity,
-    collectFees,
+    createSubPosition,
     fetchUserPositions,
-    isMinting,
     isConfirming,
     isConfirmed,
     transactionHash: hash,

@@ -844,3 +844,124 @@ export const STATE_VIEW_ABI = [
     type: "function",
   },
 ] as const;
+
+// Allowance Transfer ABI
+export const CHECK_ALLOWANCE_ABI = [
+  {
+    inputs: [
+      { internalType: "address", name: "owner", type: "address" },
+      { internalType: "address", name: "spender", type: "address" },
+    ],
+    name: "allowance",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+// Allowance Transfer ABI
+export const APPROVE_ALLOWANCE_ABI = [
+  {
+    inputs: [
+      { internalType: "address", name: "spender", type: "address" },
+      { internalType: "uint256", name: "amount", type: "uint256" },
+    ],
+    name: "approve",
+    outputs: [{ internalType: "bool", name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+] as const;
+
+export const YOGA_MINT_POSITION_ABI = [
+  {
+    name: "mint",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tickLower", type: "int24" },
+          { name: "tickUpper", type: "int24" },
+          { name: "liquidityDelta", type: "int256" },
+        ],
+      },
+      { name: "currency0Max", type: "uint128" },
+      { name: "currency1Max", type: "uint128" },
+    ],
+    outputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "delta", type: "int256" },
+    ],
+  },
+] as const;
+
+export const YOGA_GET_KEY_ABI = [
+  {
+    name: "getKey",
+    type: "function",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [
+      { name: "currency0", type: "address" },
+      { name: "currency1", type: "address" },
+      { name: "fee", type: "uint24" },
+      { name: "tickSpacing", type: "int24" },
+      { name: "hooks", type: "address" },
+    ],
+  },
+] as const;
+
+export const YOGA_GET_TICKS_ABI = [
+  {
+    name: "getTicks",
+    type: "function",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "int24[]" }],
+  },
+] as const;
+
+export const YOGA_MODIFY_POSITION_ABI = [
+  {
+    name: "modify",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "recipient", type: "address" },
+      { name: "tokenId", type: "uint256" },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tickLower", type: "int24" },
+          { name: "tickUpper", type: "int24" },
+          { name: "liquidityDelta", type: "int256" },
+        ],
+      },
+      { name: "currency0Max", type: "uint128" },
+      { name: "currency1Max", type: "uint128" },
+    ],
+    outputs: [{ name: "delta", type: "int256" }],
+  },
+] as const;
+
+export const YOGA_OWNER_OF_ABI = [
+  {
+    name: "ownerOf",
+    type: "function",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;

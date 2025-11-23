@@ -21,6 +21,7 @@ import { ArrowLeft, Plus, Minus, Coins } from "lucide-react";
 import { Pool, Position as UniPosition } from "@uniswap/v4-sdk";
 import { Token, Ether, ChainId, CurrencyAmount } from "@uniswap/sdk-core";
 import SubPosition from "@/components/SubPosition";
+import { getPositionValue } from "@/lib/utils";
 
 // Token constants
 const ETH_NATIVE = Ether.onChain(ChainId.UNICHAIN);
@@ -40,15 +41,10 @@ export default function PositionPage() {
   const router = useRouter();
   const {
     fetchUserPositions,
-    addLiquidity,
-    removeLiquidity,
-    collectFees,
     getCurrentPrice,
-    priceToTick,
     tickToPrice,
-    getPoolInfo,
-    isMinting,
-    isConfirming,
+    getTicks,
+    getTickRangeAmounts,
     isConfirmed,
     error,
   } = useUniswap();
@@ -56,6 +52,7 @@ export default function PositionPage() {
   const [position, setPosition] = useState<PositionDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+  const [ticks, setTicks] = useState<number[]>([]);
 
   // Sub-positions state
   const [subPositions, setSubPositions] = useState<Position[]>([]);
@@ -75,6 +72,7 @@ export default function PositionPage() {
         const foundPosition = positions.find(
           (p) => p.tokenId.toString() === tokenId
         );
+
         setPosition(foundPosition || null);
       }
     } catch (error) {
@@ -92,25 +90,55 @@ export default function PositionPage() {
         setCurrentPrice(price);
       }
     });
-  }, [tokenId, getCurrentPrice]);
+    getTicks(BigInt(tokenId)).then((ticks) => {
+      setTicks(ticks);
+    });
+  }, [tokenId, getCurrentPrice, getTicks]);
+
+  const buildSubPositions = async (positionSet: Set<[number, number]>) => {
+    const subPositions: Position[] = await Promise.all(
+      Array.from(positionSet).map(async ([tickLower, tickUpper]) => {
+        const { amount0, amount1 } = await getTickRangeAmounts(
+          BigInt(tokenId),
+          tickLower,
+          tickUpper
+        );
+
+        return {
+          minPrice: tickToPrice(tickLower),
+          maxPrice: tickToPrice(tickUpper),
+          amount0: amount0.toString(),
+          amount1: amount1.toString(),
+          positionValue: getPositionValue(
+            BigInt(amount0 * 1e18),
+            BigInt(amount1 * 1e6),
+            currentPrice ?? 0
+          ),
+          lastInputToken: "eth" as const,
+        };
+      })
+    );
+    setSubPositions(subPositions);
+  };
 
   // Initialize sub-positions from the actual position
   useEffect(() => {
-    if (position && currentPrice) {
-      const minPrice = tickToPrice(position.tickLower);
-      const maxPrice = tickToPrice(position.tickUpper);
+    if (ticks && currentPrice) {
+      //order the ticks
+      const orderedTicks = ticks.sort((a, b) => a - b);
+      const positionSet = new Set<[number, number]>();
 
-      setSubPositions([
-        {
-          minPrice,
-          maxPrice,
-          amount0: "",
-          amount1: "",
-          lastInputToken: null,
-        },
-      ]);
+      for (let i = 0; i < orderedTicks.length; i++) {
+        const tick = orderedTicks[i];
+        const nextTick = orderedTicks[i + 1];
+        if (nextTick) {
+          positionSet.add([tick, nextTick]);
+        }
+      }
+
+      buildSubPositions(positionSet);
     }
-  }, [position, currentPrice, tickToPrice]);
+  }, [position, currentPrice, ticks]);
 
   // Refresh position after successful transaction
   useEffect(() => {
@@ -120,22 +148,6 @@ export default function PositionPage() {
       }, 2000);
     }
   }, [isConfirmed]);
-
-  const handleCollectFees = async () => {
-    if (!position) return;
-
-    try {
-      const accounts = (await (window as any).ethereum?.request({
-        method: "eth_accounts",
-      })) as string[];
-
-      if (accounts && accounts[0]) {
-        await collectFees(position.tokenId, accounts[0]);
-      }
-    } catch (err) {
-      console.error("Failed to collect fees:", err);
-    }
-  };
 
   if (isLoading) {
     return (
@@ -304,8 +316,14 @@ export default function PositionPage() {
                       maxPrice: sp.maxPrice,
                       amount0: sp.amount0,
                       amount1: sp.amount1,
+                      positionValue: getPositionValue(
+                        BigInt(parseFloat(sp.amount0 || "0") * 1e18),
+                        BigInt(parseFloat(sp.amount1 || "0") * 1e6),
+                        currentPrice ?? 0
+                      ),
                       lastInputToken: "eth" as const,
                     }))}
+                    ticks={ticks}
                     onRangeChange={() => {}}
                     handleAutoRebalance={() => {}}
                     tokenSymbol="ETH/USDC"
@@ -317,8 +335,7 @@ export default function PositionPage() {
                       {subPositions.map((subPos, index) => (
                         <SubPosition
                           index={index}
-                          minPrice={subPos.minPrice}
-                          maxPrice={subPos.maxPrice}
+                          position={subPos}
                           currentPrice={currentPrice}
                         />
                       ))}

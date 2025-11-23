@@ -7,6 +7,7 @@ import DepositTokens from "./DepositTokens";
 import { getColors, getPositionType } from "@/lib/utils";
 import { Position, useUniswap } from "@/providers/UniswapProvider";
 import { useAccount } from "wagmi";
+import { useParams } from "next/navigation";
 
 interface MultiRangePriceSelectorProps {
   currentPrice: number;
@@ -21,6 +22,7 @@ interface MultiRangePriceSelectorProps {
   visualMinBound?: number;
   visualMaxBound?: number;
   modifyPosition?: boolean;
+  ticks: number[];
 }
 
 export function MultiRangePriceSelector({
@@ -30,6 +32,7 @@ export function MultiRangePriceSelector({
   onBulkRangeChange,
   handleAutoRebalance,
   tokenSymbol = "ETH/USDC",
+  ticks,
   visualMinBound,
   visualMaxBound,
   modifyPosition = false,
@@ -39,9 +42,17 @@ export function MultiRangePriceSelector({
     sliderIndex: number;
   } | null>(null);
   const affectedPositionIdsRef = useRef<Set<string>>(new Set());
+  const { tokenId } = useParams();
 
   const { address } = useAccount();
-  const { priceToTick, mintPosition, isMinting, isConfirming } = useUniswap();
+  const {
+    priceToTick,
+    mintPosition,
+    isConfirming,
+    approveAllowance,
+    createSubPosition,
+    checkAllowance,
+  } = useUniswap();
 
   // Calculate visual bounds (50% below to 50% above current price if not provided)
   const lowerBound = visualMinBound ?? currentPrice * 0.5;
@@ -72,6 +83,7 @@ export function MultiRangePriceSelector({
     amount0: "",
     amount1: "",
     lastInputToken: "eth" as const,
+    positionValue: "",
   });
 
   const [addSubPosition, setAddSubPosition] = useState(false);
@@ -89,6 +101,7 @@ export function MultiRangePriceSelector({
           maxPrice: rightmost.maxPrice + range,
           amount0: "",
           amount1: "",
+          positionValue: "",
           lastInputToken: "eth" as const,
         });
       } else {
@@ -100,6 +113,7 @@ export function MultiRangePriceSelector({
           maxPrice: leftmost.minPrice,
           amount0: "",
           amount1: "",
+          positionValue: "",
           lastInputToken: "eth" as const,
         });
       }
@@ -258,23 +272,38 @@ export function MultiRangePriceSelector({
     newPositionSide,
   ]);
 
-  const handleCreatePosition = () => {
+  const handleCreatePosition = async () => {
     if (!address || !newPosition) return;
+
+    const amount1 = BigInt(parseFloat(newPosition.amount1 || "0") * 1e6);
+
+    if (amount1 > BigInt(0)) {
+      const hasAllowance = await checkAllowance(
+        address as `0x${string}`,
+        amount1
+      );
+
+      if (!hasAllowance) {
+        await approveAllowance(address as `0x${string}`, amount1);
+        return;
+      }
+    }
 
     // Convert prices to ticks
     const tickLower = priceToTick(newPosition.minPrice);
     const tickUpper = priceToTick(newPosition.maxPrice);
 
-    mintPosition({
+    createSubPosition({
+      tokenId: BigInt(tokenId as string),
       tickLower,
       tickUpper,
+      recipient: address,
       amount0Desired: BigInt(
         Math.floor(parseFloat(newPosition.amount0 || "0") * 1e18)
       ),
       amount1Desired: BigInt(
         Math.floor(parseFloat(newPosition.amount1 || "0") * 1e6)
       ),
-      recipient: address,
     });
   };
 
@@ -607,14 +636,10 @@ export function MultiRangePriceSelector({
 
           <Button
             onClick={handleCreatePosition}
-            disabled={!address || isMinting || isConfirming}
+            disabled={!address || isConfirming}
             className="w-full"
           >
-            {isMinting
-              ? "Creating Position..."
-              : isConfirming
-              ? "Confirming..."
-              : "Create Position"}
+            {isConfirming ? "Confirming..." : "Create Sub-Position"}
           </Button>
         </div>
       )}

@@ -26,6 +26,20 @@ export const getPositionType = (
   }
 };
 
+export const getPositionValue = (
+  amount0: bigint,
+  amount1: bigint,
+  currentPrice: number
+) => {
+  return (
+    parseFloat(amount0.toString()) * currentPrice +
+    parseFloat(amount1.toString())
+  ).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+  });
+};
+
 export const getColors = (index: number) => {
   const colors = [
     {
@@ -52,3 +66,35 @@ export const getColors = (index: number) => {
 
   return colors[index % colors.length];
 };
+
+export function safeGetItem<T = any>(key: string): T | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ? (JSON.parse(value) as T) : null;
+  } catch (err) {
+    console.error("localStorage get error:", err);
+    return null;
+  }
+}
+
+export function safeSetItem<T = any>(key: string, value: T): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    console.error("localStorage set error:", err);
+  }
+}
+
+export function safeRemoveItem(key: string): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.removeItem(key);
+  } catch (err) {
+    console.error("localStorage remove error:", err);
+  }
+}
